@@ -6,6 +6,39 @@ import type { CheerioAPI } from 'cheerio';
 import type { Element } from 'domhandler';
 import { FieldOption } from '../questions/QuestionModel.js';
 
+export function isSelectPlaceholder(opt?: { value?: string; text?: string }): boolean {
+  if (!opt) return true;
+  const val = (opt.value || '').trim().toLowerCase();
+  const txt = (opt.text || '').trim().toLowerCase();
+
+  // Empty values
+  if (val === '') return true;
+
+  // Common placeholder values
+  if (['-1', 'none', 'null', 'select', 'choose', 'default', 'placeholder', '--', '0'].includes(val)) {
+    // If text looks like a prompt rather than a legitimate answer
+    if (
+      txt.includes('select') ||
+      txt.includes('choose') ||
+      txt.includes('pick') ||
+      txt.startsWith('--') ||
+      txt.startsWith('-') ||
+      txt.includes('please') ||
+      txt.includes('option') ||
+      txt === ''
+    ) {
+      return true;
+    }
+  }
+
+  // Text contains prompt instructions like "Select an option", "Choose one", "-- Select --", "Please select"
+  if (/^(--|\.\.\.)?\s*(please\s+)?(select|choose|pick)\b/i.test(txt)) {
+    return true;
+  }
+
+  return false;
+}
+
 export class OptionParser {
   /**
    * Extract options from a <select> element
@@ -15,13 +48,17 @@ export class OptionParser {
     $(selectEl)
       .find('option')
       .each((_, opt) => {
-        const value = $(opt).attr('value');
+        const rawVal = $(opt).attr('value');
         const text = $(opt).text().trim();
-        // Ignore empty placeholder values if they don't have actual text or are disabled
+        const isDisabled = $(opt).attr('disabled') !== undefined;
+        // In standard HTML, if value attribute is missing, it defaults to the text
+        const value = rawVal !== undefined ? rawVal : text;
+
         if (value !== undefined) {
           options.push({
             value: value,
             text: text || value,
+            isExclusive: isDisabled,
           });
         }
       });

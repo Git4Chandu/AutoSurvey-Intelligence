@@ -301,7 +301,9 @@ export const QuestionsView: React.FC<QuestionsViewProps> = ({
                     {question.options && question.options.length > 0 ? (
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
                         {question.options.map((opt) => {
-                          const isSelected = answer?.selectedValues.includes(opt.value);
+                          const isSelected =
+                            answer?.selectedValues?.includes(opt.value) ||
+                            answer?.selectedValues?.includes(opt.label);
                           return (
                             <div
                               key={opt.id || opt.value}

@@ -6,6 +6,7 @@
  * Auto-repairs missing answers using deterministic defaults so the engine never stalls.
  */
 import { PageModel, PageAnswersModel, QuestionField } from '../questions/QuestionModel.js';
+import { isSelectPlaceholder } from '../parser/OptionParser.js';
 
 export interface ValidationResult {
   valid: boolean;
@@ -32,45 +33,73 @@ export class AnswerValidator {
       }
 
       for (const field of question.fields) {
-        let val = qAns.fields[field.name];
+        let val: any = qAns.fields[field.name];
 
-        // If field is required or there is an active validation error on the page
-        const isRequired = field.required || question.required || pageModel.errors.length > 0;
+        // In online surveys, radio/select choices and required fields must always have a valid value to advance
+        const isRequired =
+          field.required ||
+          question.required ||
+          pageModel.errors.length > 0 ||
+          field.type === 'radio' ||
+          field.type === 'select';
 
-        if (isRequired) {
-          const isMissing =
-            val === undefined ||
-            val === null ||
-            val === '' ||
-            (Array.isArray(val) && val.length === 0);
+        const isPlaceholderVal =
+          field.type === 'select' &&
+          (val === '' || isSelectPlaceholder({ value: String(val || '') }));
 
-          if (isMissing) {
-            missingRequiredFields.push(field.name);
-            const repairVal = this.getSafeRepairValue(field);
-            qAns.fields[field.name] = repairVal;
-            logs.push(`Auto-repaired required field [${field.name}] with safe value [${repairVal}]`);
-          }
+        const isMissing =
+          val === undefined ||
+          val === null ||
+          val === '' ||
+          isPlaceholderVal ||
+          (Array.isArray(val) && val.length === 0);
+
+        if (isRequired && isMissing) {
+          missingRequiredFields.push(field.name);
+          const repairVal = this.getSafeRepairValue(field);
+          qAns.fields[field.name] = repairVal;
+          logs.push(`Auto-repaired required/dropdown field [${field.name}] with safe value [${repairVal}]`);
         }
 
         // Validate option existence for selects and radios
         val = qAns.fields[field.name];
         if (val !== undefined && field.options && field.options.length > 0) {
           const validOptionValues = new Set(field.options.map(o => o.value));
+
           if (Array.isArray(val)) {
-            const filtered = val.filter(v => validOptionValues.has(v));
+            const filtered = val.filter(v => validOptionValues.has(v) && !isSelectPlaceholder({ value: v }));
             if (filtered.length === 0 && validOptionValues.size > 0) {
               invalidOptionFields.push(field.name);
-              qAns.fields[field.name] = [field.options[0].value];
+              const safeVal = this.getSafeRepairValue(field);
+              qAns.fields[field.name] = Array.isArray(safeVal) ? safeVal : [safeVal];
             } else {
               qAns.fields[field.name] = filtered;
             }
           } else if (typeof val === 'string') {
-            if (!validOptionValues.has(val) && validOptionValues.size > 0) {
-              invalidOptionFields.push(field.name);
-              // Pick first valid non-empty option
-              const fallbackOpt = field.options.find(o => o.value !== '') || field.options[0];
-              qAns.fields[field.name] = fallbackOpt.value;
-              logs.push(`Corrected invalid option for [${field.name}]: replaced with [${fallbackOpt.value}]`);
+            // First check if value matches option label (e.g. AI returned label instead of value)
+            const strVal = String(val ?? '');
+            if (!validOptionValues.has(strVal)) {
+              const matchByLabel = field.options.find(
+                o => o.text.trim().toLowerCase() === strVal.trim().toLowerCase()
+              );
+              if (matchByLabel && !isSelectPlaceholder(matchByLabel)) {
+                qAns.fields[field.name] = matchByLabel.value;
+                logs.push(`Mapped label [${strVal}] to option value [${matchByLabel.value}] for [${field.name}]`);
+                val = matchByLabel.value;
+              } else {
+                invalidOptionFields.push(field.name);
+                const safeVal = this.getSafeRepairValue(field);
+                qAns.fields[field.name] = safeVal;
+                logs.push(`Corrected invalid option for [${field.name}]: replaced with [${safeVal}]`);
+                val = safeVal;
+              }
+            }
+
+            // If it resolved to a placeholder value, replace with real valid option
+            if (field.type === 'select' && (isSelectPlaceholder({ value: String(val ?? '') }) || val === '')) {
+              const safeVal = this.getSafeRepairValue(field);
+              qAns.fields[field.name] = safeVal;
+              logs.push(`Replaced placeholder selection [${val}] with valid option [${safeVal}] for dropdown [${field.name}]`);
             }
           }
         }
@@ -90,8 +119,9 @@ export class AnswerValidator {
 
   private static getSafeRepairValue(field: QuestionField): any {
     if (field.options && field.options.length > 0) {
-      const nonEmpties = field.options.filter(o => o.value !== '');
-      const opt = nonEmpties.length > 0 ? nonEmpties[0] : field.options[0];
+      const nonPlaceholders = field.options.filter(o => !isSelectPlaceholder(o));
+      const candidates = nonPlaceholders.length > 0 ? nonPlaceholders : field.options.filter(o => o.value !== '');
+      const opt = candidates.length > 0 ? candidates[0] : field.options[0];
       return field.type === 'checkbox' ? [opt.value] : opt.value;
     }
 
