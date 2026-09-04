@@ -830,10 +830,10 @@ export class SurveyEngine {
           uiType = q.fields[0]?.type === 'select' ? 'select' : 'radio';
           break;
         case 'DROPDOWN':
+        case 'MULTI_DROPDOWN':
           uiType = 'select';
           break;
         case 'MULTIPLE':
-        case 'MULTI_DROPDOWN':
           uiType = 'checkbox';
           break;
         case 'TEXT':
@@ -900,6 +900,7 @@ export class SurveyEngine {
         questionDescription: q.instruction || undefined,
         optionsSummary: optionsSummary.length > 0 ? optionsSummary : undefined,
         inputName: q.fields[0]?.name,
+        fieldAnswers: qAns.fields,
       });
     }
 
@@ -1019,7 +1020,46 @@ export class SurveyEngine {
             function applyAnswers() {
               if (!Array.isArray(answers)) return;
               answers.forEach(function(ans) {
-                // 1. Dropdown / Select elements
+                // 1. Dropdown / Select elements by fieldAnswers
+                if (ans.fieldAnswers && typeof ans.fieldAnswers === 'object') {
+                  Object.keys(ans.fieldAnswers).forEach(function(fieldName) {
+                    const val = ans.fieldAnswers[fieldName];
+                    if (val === undefined || val === null || val === '') return;
+                    try {
+                      const cleanField = fieldName.replace(/^(?:mobile_|desktop_)/i, '').replace(/_input$/i, '');
+                      const selQueries = [
+                        'select[name="' + CSS.escape(fieldName) + '"]',
+                        'select[name="' + CSS.escape(cleanField) + '"]',
+                        'select#' + CSS.escape(fieldName),
+                        'select#' + CSS.escape(cleanField),
+                        'select#mobile_' + CSS.escape(cleanField) + '_input',
+                        'select#desktop_' + CSS.escape(cleanField) + '_input',
+                        'select[id*="' + CSS.escape(cleanField) + '"]'
+                      ];
+                      const matchedSelects = Array.from(document.querySelectorAll(selQueries.join(', ')));
+                      matchedSelects.forEach(function(sel) {
+                        sel.value = String(val);
+                        const opt = sel.querySelector('option[value="' + CSS.escape(String(val)) + '"]');
+                        if (opt) opt.selected = true;
+                        sel.classList.add('__sr_auto_answered__');
+                        try {
+                          sel.dispatchEvent(new Event('change', { bubbles: true }));
+                          sel.dispatchEvent(new Event('input', { bubbles: true }));
+                        } catch (e) {}
+
+                        const container = sel.closest('.cf-grid-layout__row, .form-group, .question, .cf-question, .cf-dropdown, td') || sel.parentElement;
+                        if (container && !container.querySelector('.__sr_answer_badge__')) {
+                          const badge = document.createElement('span');
+                          badge.className = '__sr_answer_badge__';
+                          badge.textContent = '✓ AUTO-SELECTED (' + val + ')';
+                          container.appendChild(badge);
+                        }
+                      });
+                    } catch (e) {}
+                  });
+                }
+
+                // 1b. Dropdown / Select elements by selectedValues fallback
                 (ans.selectedValues || []).forEach(function(val) {
                   try {
                     let selects = [];

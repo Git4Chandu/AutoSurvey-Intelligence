@@ -354,7 +354,12 @@ export const QuestionsView: React.FC<QuestionsViewProps> = ({
                             <span>AUTO-ANSWER RESULT:</span>
                           </div>
                           <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800 text-[11px] font-bold">
-                            Value: {answer.textResponse || answer.selectedValues.join(', ') || 'Submitted'}
+                            Value:{' '}
+                            {answer.fieldAnswers && Object.keys(answer.fieldAnswers).length > 1
+                              ? Object.entries(answer.fieldAnswers)
+                                  .map(([k, v]) => `${k.replace(/^(?:mobile_|desktop_)/i, '').replace(/_input$/i, '')}: ${v}`)
+                                  .join(' | ')
+                              : answer.textResponse || answer.selectedValues.join(', ') || 'Submitted'}
                           </span>
                         </div>
 

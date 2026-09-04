@@ -54,21 +54,32 @@ export class QuestionParser {
       }
     }
 
-    $('form select').each((i, sel) => {
-      const name = $(sel).attr('name') || $(sel).attr('id') || `select_${i + 1}`;
+    $('select').each((i, sel) => {
+      const rawName = $(sel).attr('name');
+      const rawId = $(sel).attr('id') || '';
+      const name = rawName ? rawName.trim() : (FieldParser.normalizeFieldName(rawId) || rawId || `select_${i + 1}`);
       if (existingFieldNames.has(name)) return;
 
-      const qId = $(sel).attr('id') || name;
+      const qId = rawId ? FieldParser.normalizeFieldName(rawId) : name;
       if (processedQuestionIds.has(qId)) return;
 
-      const parentContainer = $(sel).closest('.form-group, .question, .cf-dropdown, fieldset, tr, p, div');
-      const labelText =
-        $(`label[for="${$(sel).attr('id')}"]`).text().trim() ||
+      const parentContainer = $(sel).closest('.form-group, .question, .cf-question, .cf-dropdown, fieldset, tr, p, div');
+      let labelText =
+        $(`label[for="${rawId}"]`).text().trim() ||
         $(sel).prev('label').text().trim() ||
         $(sel).closest('label').text().trim() ||
         parentContainer.find('.question-title, .cf-question__text, label, h3, h4, strong').first().text().trim() ||
         $(sel).attr('placeholder') ||
-        name;
+        '';
+
+      if (!labelText) {
+        const placeholderOpt = $(sel).find('option[value=""], option:not([value])').first().text().trim();
+        if (placeholderOpt && !/^(--|\.\.\.)?\s*(please\s+)?select\b/i.test(placeholderOpt)) {
+          labelText = placeholderOpt;
+        } else {
+          labelText = name;
+        }
+      }
 
       const options = OptionParser.parseSelectOptions($, sel);
       const isRequired = $(sel).attr('required') !== undefined || $(sel).attr('aria-required') === 'true';
@@ -78,6 +89,7 @@ export class QuestionParser {
         type: 'select',
         required: isRequired,
         options,
+        label: labelText,
         defaultValue: $(sel).find('option[selected]').attr('value') || undefined,
       }];
 
@@ -223,9 +235,13 @@ export class QuestionParser {
     if (selectFields.length > 1) {
       return 'MULTI_DROPDOWN';
     }
-    if (selectFields.length === 1 && fields.length === 1) {
+    if (selectFields.length === 1 && (fields.length === 1 || selectFields.length === fields.length)) {
       return 'DROPDOWN';
     }
+
+    if (cfData?.dropdown) return 'DROPDOWN';
+    if (cfData?.nodeType === 'Grid3d' && selectFields.length > 0) return 'MULTI_DROPDOWN';
+    if (Array.isArray(cfData?.questions) && cfData.questions.some((q: any) => q.dropdown)) return 'MULTI_DROPDOWN';
 
     const radioFields = fields.filter(f => f.type === 'radio');
     if (radioFields.length === 1 && fields.length === 1) {

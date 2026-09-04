@@ -14,6 +14,25 @@ import { OptionParser } from './OptionParser.js';
 
 export class FieldParser {
   /**
+   * Normalizes raw HTML input/select element names or IDs to their canonical field name.
+   * Confirmit and modern responsive survey engines duplicate controls for mobile and desktop,
+   * wrapping them in IDs like:
+   *   "mobile_S3xY_1_input" -> "S3xY_1"
+   *   "desktop_S3xY_1_input" -> "S3xY_1"
+   *   "S3xY_1_input" -> "S3xY_1"
+   * Strip responsive prefixes and control suffixes so only canonical POST fields remain.
+   */
+  public static normalizeFieldName(rawNameOrId: string): string {
+    if (!rawNameOrId) return rawNameOrId;
+    let name = rawNameOrId.trim();
+    // Strip Confirmit responsive viewport prefixes: mobile_ or desktop_
+    name = name.replace(/^(?:mobile_|desktop_)/i, '');
+    // Strip _input suffix commonly appended to Confirmit form controls
+    name = name.replace(/_input$/i, '');
+    return name;
+  }
+
+  /**
    * Parse all fields inside a question container element
    */
   public static parseFields(
@@ -29,7 +48,12 @@ export class FieldParser {
     $(questionContainer)
       .find('select')
       .each((_, sel) => {
-        const name = $(sel).attr('name') || $(sel).attr('id') || `${questionId}_select`;
+        const rawName = $(sel).attr('name');
+        const rawId = $(sel).attr('id') || '';
+        // If explicit name attribute exists, prefer it; otherwise normalize id
+        const name = rawName ? rawName.trim() : (FieldParser.normalizeFieldName(rawId) || rawId || `${questionId}_select`);
+        
+        // Deduplicate responsive desktop/mobile copies of the exact same dropdown control
         if (seenFieldNames.has(name)) return;
         seenFieldNames.add(name);
 
@@ -37,11 +61,32 @@ export class FieldParser {
         const isRequired = $(sel).attr('required') !== undefined ||
                            $(sel).attr('aria-required') === 'true';
 
-        // Extract label if next to select
-        const label = $(sel).prev('label').text().trim() ||
-                      $(sel).closest('tr').find('th, td:first-child').text().trim() ||
-                      $(`label[for="${$(sel).attr('id')}"]`).text().trim() ||
-                      undefined;
+        // Extract label from nearest label, table column/row header, or data-labelledby
+        let label = $(sel).prev('label').text().trim() ||
+                    $(sel).closest('tr').find('th, td:first-child').text().trim() ||
+                    $(`label[for="${rawId}"]`).text().trim() ||
+                    $(`[id*="${name}_text"], [id*="${rawId.replace('_input', '')}_text"]`).first().text().trim() ||
+                    undefined;
+
+        // If no explicit DOM label found, look at the first placeholder option (e.g. <option value="">Years</option>)
+        if (!label) {
+          const placeholderOpt = $(sel).find('option[value=""], option:not([value])').first().text().trim();
+          if (placeholderOpt && !/^(--|\.\.\.)?\s*(please\s+)?select\b/i.test(placeholderOpt)) {
+            label = placeholderOpt;
+          }
+        }
+
+        // Cross-reference cfApiQuestionData if available to enrich title/label
+        if (cfApiQuestionData && Array.isArray(cfApiQuestionData.questions)) {
+          const matchedSubQ = cfApiQuestionData.questions.find((q: any) =>
+            q.answers?.some((a: any) => a.fieldName === name) ||
+            q.questionId === name ||
+            name.startsWith(q.questionId)
+          );
+          if (matchedSubQ && (matchedSubQ.dropdownTitle || matchedSubQ.title)) {
+            label = matchedSubQ.dropdownTitle || matchedSubQ.title;
+          }
+        }
 
         fields.push({
           name,
@@ -178,52 +223,87 @@ export class FieldParser {
     }
 
     // 6. Augment or populate from cfApi JSON if available
-    if (cfApiQuestionData && Array.isArray(cfApiQuestionData.answers)) {
-      if (fields.length === 0) {
-        const isMulti = cfApiQuestionData.nodeType === 'Multi' || !!cfApiQuestionData.multiCount;
-        const mainFieldName = cfApiQuestionData.answers[0]?.fieldName || questionId;
-        const options: FieldOption[] = cfApiQuestionData.answers.map((a: any) => ({
-          value: a.code || a.fieldName,
-          text: a.text || a.code || '',
-          score: a.score,
-          isExclusive: a.isExclusive,
-        }));
+    if (cfApiQuestionData) {
+      // 6a. Support nested questions in Confirmit Grid3d or multi-dropdown structures
+      if (Array.isArray(cfApiQuestionData.questions) && cfApiQuestionData.questions.length > 0) {
+        for (const subQ of cfApiQuestionData.questions) {
+          const subFieldName = subQ.answers?.[0]?.fieldName || subQ.questionId;
+          const subScales = Array.isArray(subQ.scales) ? subQ.scales : [];
+          const subAnswers = Array.isArray(subQ.answers) ? subQ.answers : [];
+          const optionsList = (subScales.length > 0 ? subScales : subAnswers).map((s: any) => ({
+            value: String(s.code ?? s.value ?? s.fieldName ?? ''),
+            text: String(s.text || s.code || ''),
+          }));
 
-        if (isMulti) {
-          // If multi, each answer may have its own fieldName or be part of a list
-          for (const ans of cfApiQuestionData.answers) {
-            const fName = ans.fieldName || `${questionId}_${ans.code}`;
-            if (!seenFieldNames.has(fName)) {
-              seenFieldNames.add(fName);
+          let existing = fields.find(f => f.name === subFieldName || FieldParser.normalizeFieldName(f.name) === subFieldName);
+          if (existing) {
+            existing.name = subFieldName; // Ensure canonical Confirmit field name
+            if (!existing.label && (subQ.dropdownTitle || subQ.title)) {
+              existing.label = subQ.dropdownTitle || subQ.title;
+            }
+            if ((!existing.options || existing.options.length === 0) && optionsList.length > 0) {
+              existing.options = optionsList;
+            }
+          } else if (fields.length === 0 && subFieldName) {
+            seenFieldNames.add(subFieldName);
+            fields.push({
+              name: subFieldName,
+              type: subQ.dropdown ? 'select' : 'radio',
+              required: subQ.required ?? true,
+              options: optionsList,
+              label: subQ.dropdownTitle || subQ.title,
+            });
+          }
+        }
+      }
+
+      // 6b. Standard single/multi questions in cfApi
+      if (Array.isArray(cfApiQuestionData.answers) && cfApiQuestionData.answers.length > 0) {
+        if (fields.length === 0) {
+          const isMulti = cfApiQuestionData.nodeType === 'Multi' || !!cfApiQuestionData.multiCount;
+          const mainFieldName = cfApiQuestionData.answers[0]?.fieldName || questionId;
+          const options: FieldOption[] = cfApiQuestionData.answers.map((a: any) => ({
+            value: a.code || a.fieldName,
+            text: a.text || a.code || '',
+            score: a.score,
+            isExclusive: a.isExclusive,
+          }));
+
+          if (isMulti) {
+            for (const ans of cfApiQuestionData.answers) {
+              const fName = ans.fieldName || `${questionId}_${ans.code}`;
+              if (!seenFieldNames.has(fName)) {
+                seenFieldNames.add(fName);
+                fields.push({
+                  name: fName,
+                  type: 'checkbox',
+                  required: false,
+                  options: [{ value: ans.code, text: ans.text || ans.code }],
+                });
+              }
+            }
+          } else {
+            if (!seenFieldNames.has(mainFieldName)) {
+              seenFieldNames.add(mainFieldName);
               fields.push({
-                name: fName,
-                type: 'checkbox',
-                required: false,
-                options: [{ value: ans.code, text: ans.text || ans.code }],
+                name: mainFieldName,
+                type: cfApiQuestionData.dropdown ? 'select' : 'radio',
+                required: cfApiQuestionData.required ?? true,
+                options,
               });
             }
           }
         } else {
-          if (!seenFieldNames.has(mainFieldName)) {
-            seenFieldNames.add(mainFieldName);
-            fields.push({
-              name: mainFieldName,
-              type: cfApiQuestionData.dropdown ? 'select' : 'radio',
-              required: cfApiQuestionData.required ?? true,
-              options,
-            });
-          }
-        }
-      } else {
-        // Enrich existing fields with cfApi options if Cheerio missed labels
-        for (const field of fields) {
-          if (!field.options || field.options.length === 0) {
-            const matchAnswers = cfApiQuestionData.answers.filter((a: any) => a.fieldName === field.name);
-            if (matchAnswers.length > 0) {
-              field.options = matchAnswers.map((a: any) => ({
-                value: a.code,
-                text: a.text || a.code,
-              }));
+          // Enrich existing fields with cfApi options if Cheerio missed labels
+          for (const field of fields) {
+            if (!field.options || field.options.length === 0) {
+              const matchAnswers = cfApiQuestionData.answers.filter((a: any) => a.fieldName === field.name);
+              if (matchAnswers.length > 0) {
+                field.options = matchAnswers.map((a: any) => ({
+                  value: a.code,
+                  text: a.text || a.code,
+                }));
+              }
             }
           }
         }

@@ -34,6 +34,15 @@ export class AnswerValidator {
 
       for (const field of question.fields) {
         let val: any = qAns.fields[field.name];
+        if (val === undefined) {
+          // Check common responsive aliases if AI keyed by mobile_... or desktop_... or un-normalized name
+          val = qAns.fields[`mobile_${field.name}_input`] ??
+                qAns.fields[`desktop_${field.name}_input`] ??
+                qAns.fields[`${field.name}_input`];
+          if (val !== undefined) {
+            qAns.fields[field.name] = val;
+          }
+        }
 
         // In online surveys, radio/select choices and required fields must always have a valid value to advance
         const isRequired =

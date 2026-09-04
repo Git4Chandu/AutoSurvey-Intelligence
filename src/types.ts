@@ -81,6 +81,7 @@ export interface QuestionAnswer {
   questionDescription?: string;
   optionsSummary?: string[];
   inputName?: string;
+  fieldAnswers?: Record<string, any>;
 }
 
 export type PersonaType =
