@@ -26,7 +26,8 @@ import {
   HelpCircle,
   Globe,
   AlertTriangle,
-  Monitor
+  Monitor,
+  LayoutDashboard
 } from 'lucide-react';
 
 const DEFAULT_CONFIG: SimulationConfig = {
@@ -46,7 +47,7 @@ export default function App() {
   const [session, setSession] = useState<SurveySession | null>(null);
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [showCompletionModal, setShowCompletionModal] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<'questions' | 'screen' | 'terminal'>('questions');
+  const [activeTab, setActiveTab] = useState<'split' | 'questions' | 'screen' | 'terminal'>('split');
   const [selectedScreenPageIndex, setSelectedScreenPageIndex] = useState<number | undefined>(undefined);
   const [activeRedirectModalArchive, setActiveRedirectModalArchive] = useState<RedirectedSurveyArchive | null>(null);
   const [isInspecting, setIsInspecting] = useState<boolean>(false);
@@ -61,6 +62,11 @@ export default function App() {
         eventSourceRef.current.close();
       }
     };
+  }, []);
+
+  // Pre-inspect default survey URL on mount so survey DOM and question requirements load immediately
+  useEffect(() => {
+    handleInspect(url);
   }, []);
 
   // Listen for session completion to pop up completion modal
@@ -158,28 +164,31 @@ export default function App() {
     }
   };
 
-  const handleInspect = async () => {
-    if (!url.trim()) return;
+  const handleInspect = async (targetUrl?: string) => {
+    const inspectUrl = (targetUrl || url).trim();
+    if (!inspectUrl) return;
     setIsInspecting(true);
-    setInspectedPage(null);
 
     try {
       const res = await fetch('/api/survey/parse', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: url.trim() }),
+        body: JSON.stringify({ url: inspectUrl }),
       });
       const data = await res.json();
       if (data.page) {
         setInspectedPage(data.page);
-        setActiveTab('questions');
-      } else if (data.isCompleted) {
-        alert(data.completionMessage || 'This survey page is already completed!');
-      } else {
-        alert('Could not find survey questions on this page.');
+      } else if (targetUrl === undefined) {
+        if (data.isCompleted) {
+          alert(data.completionMessage || 'This survey page is already completed!');
+        } else {
+          alert('Could not find survey questions on this page.');
+        }
       }
     } catch (err: any) {
-      alert(`Inspection failed: ${err.message}`);
+      if (targetUrl === undefined) {
+        alert(`Inspection failed: ${err.message}`);
+      }
     } finally {
       setIsInspecting(false);
     }
@@ -258,8 +267,23 @@ export default function App() {
         )}
 
         {/* Main Workspace Tabs */}
-        <div className="flex items-center justify-between border-b border-[#1E293B] pb-px">
+        <div className="flex items-center justify-between border-b border-[#1E293B] pb-px flex-wrap gap-2">
           <div className="flex items-center gap-1">
+            <button
+              onClick={() => setActiveTab('split')}
+              className={`flex items-center gap-2 px-4 py-2.5 text-xs font-mono font-bold uppercase tracking-wider rounded-t-lg border-t border-x transition-all ${
+                activeTab === 'split'
+                  ? 'bg-[#111827] border-[#1E293B] text-emerald-400 -mb-px border-b-[#111827] z-10 shadow-lg'
+                  : 'border-transparent text-slate-500 hover:text-slate-300'
+              }`}
+            >
+              <LayoutDashboard className="w-4 h-4" />
+              <span>Split View (Live Screen + Questions)</span>
+              {session?.status === 'delaying' && (
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping ml-1"></span>
+              )}
+            </button>
+
             <button
               onClick={() => setActiveTab('questions')}
               className={`flex items-center gap-2 px-4 py-2.5 text-xs font-mono font-bold uppercase tracking-wider rounded-t-lg border-t border-x transition-all ${
@@ -286,7 +310,7 @@ export default function App() {
               }`}
             >
               <Monitor className="w-4 h-4" />
-              <span>Live Screen Window</span>
+              <span>Live Screen Full Window</span>
               {session?.status === 'delaying' && (
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping ml-1"></span>
               )}
@@ -325,6 +349,36 @@ export default function App() {
 
         {/* Tab Contents */}
         <div className="pt-2">
+          {/* Split View: Questions + Live Screen Window Side-by-Side */}
+          {activeTab === 'split' && (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+              {/* Left column: Questions and Rationale */}
+              <div className="lg:col-span-5 space-y-4">
+                <QuestionsView
+                  currentPageData={displayPageData}
+                  currentAnswers={session?.currentAnswers || []}
+                  history={session?.history || []}
+                  activeDelay={session?.activeDelay}
+                  isCompleted={session?.status === 'completed'}
+                  onViewStageScreen={(pageIndex) => {
+                    setSelectedScreenPageIndex(pageIndex);
+                  }}
+                />
+              </div>
+
+              {/* Right column: Interactive Live Screen Window */}
+              <div className="lg:col-span-7 space-y-4">
+                <LiveScreenWindow
+                  session={session}
+                  selectedPageIndex={selectedScreenPageIndex}
+                  onSelectPageIndex={setSelectedScreenPageIndex}
+                  fallbackSurveyUrl={url}
+                  inspectedPage={inspectedPage}
+                />
+              </div>
+            </div>
+          )}
+
           {activeTab === 'questions' && (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               {/* Left 2 columns: Questions and Answers */}
@@ -353,38 +407,35 @@ export default function App() {
                     </div>
                     <button
                       onClick={() => setActiveTab('screen')}
-                      className="text-[11px] font-mono text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-bold"
+                      className="text-[11px] font-mono text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-bold cursor-pointer"
                     >
                       Maximize <ExternalLink className="w-3 h-3" />
                     </button>
                   </div>
-                  <div className="p-3 bg-[#030712] border border-[#1E293B] rounded-lg text-xs font-mono text-slate-300">
-                    <p className="text-[11px] text-slate-400 leading-relaxed mb-3">
-                      View the rendered DOM screen of the survey page currently being answered with form fields dynamically highlighted.
+                  <div className="p-2.5 bg-[#030712] border border-[#1E293B] rounded-lg text-xs font-mono text-slate-300 space-y-3">
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      Survey page loaded with form inputs, radio selections, and requirement highlights.
                     </p>
                     <div className="flex gap-2">
                       <button
-                        onClick={() => setActiveTab('screen')}
+                        onClick={() => setActiveTab('split')}
                         className="flex-1 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded text-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
                       >
-                        <Globe className="w-3.5 h-3.5" />
-                        <span>Open Screen Window</span>
+                        <LayoutDashboard className="w-3.5 h-3.5" />
+                        <span>Open Split View</span>
                       </button>
-                      {session?.sessionId && (
-                        <button
-                          onClick={() => {
-                            window.open(
-                              `/api/survey/screen/${session.sessionId}`,
-                              '_blank',
-                              'width=1000,height=800'
-                            );
-                          }}
-                          className="px-2.5 py-1.5 bg-[#1E293B] hover:bg-[#334155] text-slate-200 rounded text-xs transition-colors"
-                          title="Open detached window"
-                        >
-                          <ExternalLink className="w-3.5 h-3.5 text-emerald-400" />
-                        </button>
-                      )}
+                      <button
+                        onClick={() => {
+                          const popUrl = session?.sessionId
+                            ? `/api/survey/screen/${session.sessionId}`
+                            : `/api/survey/preview-screen?url=${encodeURIComponent(url)}`;
+                          window.open(popUrl, '_blank', 'width=1100,height=850');
+                        }}
+                        className="px-2.5 py-1.5 bg-[#1E293B] hover:bg-[#334155] text-slate-200 rounded text-xs transition-colors cursor-pointer"
+                        title="Open detached window"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5 text-emerald-400" />
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -445,21 +496,6 @@ export default function App() {
                     </div>
                   </div>
                 </div>
-
-                {/* How It Works Explainer */}
-                <div className="bg-[#030712] border border-[#1E293B] text-slate-300 rounded-xl p-4 shadow-xl text-xs font-mono">
-                  <div className="flex items-center gap-1.5 font-bold mb-2 text-emerald-400 uppercase tracking-wider">
-                    <HelpCircle className="w-3.5 h-3.5" />
-                    Core Pipeline Architecture:
-                  </div>
-                  <ol className="space-y-2 text-slate-400 list-decimal list-inside leading-relaxed text-[11px]">
-                    <li>Fetches and parses target HTML DOM structure via Cheerio & regex extractors.</li>
-                    <li>Identifies question types, inputs, radios, scales, and hidden CSRF tokens.</li>
-                    <li>Gemini reasoning constructs authentic choices fitting the respondent persona.</li>
-                    <li>Applies human hesitation delay, reading time, and keystroke cadence intervals.</li>
-                    <li>Submits payload and auto-advances across multi-step sequences to completion.</li>
-                  </ol>
-                </div>
               </div>
             </div>
           )}
@@ -471,6 +507,8 @@ export default function App() {
                 session={session}
                 selectedPageIndex={selectedScreenPageIndex}
                 onSelectPageIndex={setSelectedScreenPageIndex}
+                fallbackSurveyUrl={url}
+                inspectedPage={inspectedPage}
               />
             </div>
           )}

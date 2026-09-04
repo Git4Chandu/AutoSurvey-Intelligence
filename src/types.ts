@@ -29,7 +29,9 @@ export interface QuestionField {
 export interface SurveyQuestion {
   id: string;
   title: string;
+  text?: string;
   description?: string;
+  instruction?: string;
   type: QuestionType;
   options?: QuestionOption[];
   fields?: QuestionField[];

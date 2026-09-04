@@ -211,6 +211,43 @@ async function startServer() {
     res.send(html);
   });
 
+  // Get preview augmented HTML of any survey URL (even before session starts)
+  app.get('/api/survey/preview-screen', async (req, res) => {
+    try {
+      const url = req.query.url as string;
+      if (!url) {
+        res.status(400).send('<!DOCTYPE html><html><body style="font-family:sans-serif;padding:30px;background:#030712;color:#94a3b8;"><h2>Missing URL</h2><p>Provide a survey URL to preview.</p></body></html>');
+        return;
+      }
+      let targetUrl = url.trim();
+      if (targetUrl.startsWith('/')) {
+        const protocol = req.protocol;
+        const host = req.get('host') || 'localhost:3000';
+        targetUrl = `${protocol}://${host}${targetUrl}`;
+      }
+
+      const response = await fetch(targetUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+        }
+      });
+      const html = await response.text();
+      const augmented = surveyEngine.injectPreviewAugmentations(
+        html,
+        response.url || targetUrl,
+        [],
+        1,
+        'Survey Page Preview'
+      );
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.send(augmented);
+    } catch (err: any) {
+      res.status(500).send(`<!DOCTYPE html><html><body style="font-family:sans-serif;padding:30px;background:#030712;color:#ef4444;"><h2>Failed to load survey preview</h2><p>${err.message}</p></body></html>`);
+    }
+  });
+
   // Get archived survey last-page screen snapshot
   app.get('/api/survey/archive-screen/:sessionId/:archiveId', (req, res) => {
     const { sessionId, archiveId } = req.params;

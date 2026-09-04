@@ -54,56 +54,92 @@ export class GeminiAnswerProvider implements IAnswerProvider {
       text: q.text,
       type: q.type,
       required: q.required,
+      instruction: q.instruction || null,
+      errorMessage: q.errorMessage || null,
       fields: q.fields.map(f => ({
         name: f.name,
         type: f.type,
         label: f.label,
         options: f.options?.map(o => ({ value: o.value, label: o.text })),
         required: f.required,
+        placeholder: f.placeholder,
       })),
     }));
 
-    const systemPrompt = `You are an automated survey testing respondent executing survey quality assurance.
+    const systemPrompt = `You are AutoSurvey Intelligence, an advanced automated survey respondent analyzing and executing online surveys.
 Respondent Persona: ${context.persona}
-${context.customPersonaPrompt ? `Persona Instructions: ${context.customPersonaPrompt}` : ''}
+${context.customPersonaPrompt ? `Special Persona Guidelines: ${context.customPersonaPrompt}` : ''}
 
-CRITICAL RULES:
-1. You MUST answer every question by providing values for its EXACT field names.
-2. DO NOT invent or fabricate field names. Only use the "name" provided in each field.
-3. For "select" (dropdowns) or "radio", the value MUST be one of the option values provided.
-4. For multiple dropdowns, provide an answer for each select field.
-5. For checkboxes, return an array of selected option values.
-6. Return ONLY valid JSON matching this schema:
+SURVEY QUESTION UNDERSTANDING & ANSWERING REQUIREMENTS:
+1. THOROUGHLY READ & UNDERSTAND each question's prompt, description, and instruction (e.g., "Select all that apply", "Choose your top 2", "Rank your satisfaction", "Explain why...").
+2. ADHERE TO CONSTRAINTS:
+   - If a question is required (required: true), you MUST provide an answer for its fields.
+   - For "radio" or single "select" (dropdowns): Choose EXACTLY ONE valid option value from the provided options list that best matches the respondent persona.
+   - For "checkbox": Return an array of strings with the selected option values. If instructions specify a number (e.g., "choose at least 2"), satisfy that condition.
+   - For "text" or "textarea": Formulate a coherent, articulate, authentic human answer matching the persona (write at least 2-3 detailed sentences for open feedback textareas).
+   - For "number" or "rating" or "scale": Provide a sensible number or rating value within the question's bounds.
+   - For matrix/grid questions with multiple row fields: Provide an answer for every row field name.
+3. PRESERVE EXACT FIELD NAMES: You MUST use the exact "name" string provided in each field. Never invent names.
+4. VALIDATION FEEDBACK: If existing validation errors are listed, analyze why the previous answer failed and provide corrective answers that pass validation.
+5. REASONING: In the "reasoning" property for each question, explicitly state:
+   - What the question was asking and required
+   - Why the selected option(s) or response was chosen according to the persona profile.
+
+OUTPUT FORMAT:
+Return ONLY valid JSON matching this schema:
 {
   "QUESTION_ID": {
     "fields": {
-      "FIELD_NAME": "OPTION_VALUE_OR_TEXT"
+      "EXACT_FIELD_NAME": "VALUE_OR_ARRAY_FOR_CHECKBOXES"
     },
-    "reasoning": "Short explanation of why this answer fits the persona"
+    "reasoning": "Understood requirement: [brief requirement]. Answered: [why this fits the persona]"
   }
 }`;
 
-    const userContent = `Here are the questions on the survey page:
+    const userContent = `Here are the questions detected on the current survey page:
 ${JSON.stringify(promptStructure, null, 2)}
 
 Existing Page Validation Errors (if any):
 ${JSON.stringify(pageModel.errors)}
 
-Provide answers in strict JSON format.`;
+Formulate thoughtful, valid responses fulfilling every question requirement in strict JSON format.`;
 
-    const response = await this.aiClient!.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: [
-        { role: 'user', parts: [{ text: `${systemPrompt}\n\n${userContent}` }] },
-      ],
-      config: {
-        responseMimeType: 'application/json',
-        temperature: 0.3,
-      },
-    });
+    let response;
+    try {
+      response = await this.aiClient!.models.generateContent({
+        model: 'gemini-3.1-flash-lite',
+        contents: [
+          { role: 'user', parts: [{ text: `${systemPrompt}\n\n${userContent}` }] },
+        ],
+        config: {
+          responseMimeType: 'application/json',
+          temperature: 0.2,
+        },
+      });
+    } catch (e1: any) {
+      console.warn('[GeminiAnswerProvider] Primary model gemini-3.1-flash-lite failed, trying gemini-3.8-flash:', e1.message);
+      response = await this.aiClient!.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: [
+          { role: 'user', parts: [{ text: `${systemPrompt}\n\n${userContent}` }] },
+        ],
+        config: {
+          responseMimeType: 'application/json',
+          temperature: 0.2,
+        },
+      });
+    }
 
-    const responseText = response.text || '';
-    const parsed = JSON.parse(responseText);
+    let responseText = response.text || '{}';
+    // Clean potential markdown wrap
+    responseText = responseText.replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim();
+    let parsed: any = {};
+    try {
+      parsed = JSON.parse(responseText);
+    } catch (parseErr: any) {
+      console.warn('[GeminiAnswerProvider] Failed to parse Gemini response as JSON, falling back:', parseErr.message);
+      return this.fallbackProvider.getAnswers(pageModel, context);
+    }
 
     const answers: PageAnswersModel = {};
     for (const q of questionsToAnswer) {
@@ -111,7 +147,7 @@ Provide answers in strict JSON format.`;
       if (qAnswer && qAnswer.fields) {
         answers[q.id] = {
           fields: qAnswer.fields,
-          reasoning: qAnswer.reasoning || 'Answered via AI survey respondent simulation.',
+          reasoning: qAnswer.reasoning || `Analyzed question requirement "${q.text.slice(0, 40)}..." and formulated response matching ${context.persona} persona.`,
           delayBreakdown: {
             readingMs: 800,
             thinkingMs: 600,

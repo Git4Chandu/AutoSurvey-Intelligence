@@ -238,7 +238,7 @@ export const QuestionsView: React.FC<QuestionsViewProps> = ({
                       </span>
                       <div className="flex-1 min-w-0">
                         {/* Question ID and Meta Badges */}
-                        <div className="flex items-center flex-wrap gap-1.5 mb-1">
+                        <div className="flex items-center flex-wrap gap-1.5 mb-1.5">
                           <span className="px-2 py-0.5 rounded bg-[#030712] border border-emerald-500/50 text-emerald-300 font-mono font-bold text-[11px]">
                             ID: {question.id}
                           </span>
@@ -247,9 +247,16 @@ export const QuestionsView: React.FC<QuestionsViewProps> = ({
                               field: {question.inputName}
                             </span>
                           )}
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#030712] border border-[#1E293B] text-slate-400 uppercase tracking-wider">
-                            {question.type}
-                          </span>
+                          {renderQuestionTypeBadge(question.type)}
+                          {question.required ? (
+                            <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-rose-950/60 border border-rose-800/60 text-rose-300 uppercase tracking-wider">
+                              Required *
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#030712] border border-[#1E293B] text-slate-500 uppercase tracking-wider">
+                              Optional
+                            </span>
+                          )}
                           {question.isInfoOnly && (
                             <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-blue-950/60 border border-blue-800 text-blue-300 uppercase tracking-wider">
                               INFO
@@ -264,13 +271,19 @@ export const QuestionsView: React.FC<QuestionsViewProps> = ({
 
                         {/* Question Title / Prompt */}
                         <h4 className="text-sm font-semibold text-slate-100 leading-snug">
-                          {question.title}
+                          {question.title || question.text}
                           {question.required && (
                             <span className="text-rose-400 ml-1 font-mono font-bold">*</span>
                           )}
                         </h4>
                         {question.description && (
                           <p className="text-xs font-mono text-slate-400 mt-0.5">{question.description}</p>
+                        )}
+                        {question.instruction && (
+                          <div className="mt-1.5 px-2.5 py-1 rounded bg-purple-950/40 border border-purple-800/40 text-purple-200 font-mono text-xs flex items-center gap-1.5">
+                            <Info className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                            <span>Requirement Constraint: {question.instruction}</span>
+                          </div>
                         )}
                         {question.errorMessage && (
                           <p className="text-xs font-mono text-rose-400 mt-1 flex items-center gap-1">

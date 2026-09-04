@@ -345,7 +345,37 @@ export class SurveyEngine {
         abortController.signal
       );
 
-      // Record History for this screen (README: Testing Results & Time Taken)
+      // Check if screen content genuinely transitioned to a new page or completed
+      const screenChanged = this.hasScreenContentChanged(currentPageModel, submitResult.nextPage);
+
+      // If validation feedback returned OR screen content remained identical:
+      // DO NOT increment pageIndex and DO NOT log as a finished stage!
+      if (submitResult.hasErrors || !screenChanged) {
+        const feedbackReason = submitResult.hasErrors
+          ? `Validation feedback returned from survey: "${submitResult.errors.join(', ')}"`
+          : 'Survey form re-rendered same page (inputs rejected or next step not triggered)';
+
+        this.addLog(
+          ctx,
+          'warn',
+          `${feedbackReason}. Page count remains at ${pageIndex}. Re-evaluating question requirements and submitting corrective responses...`
+        );
+
+        retryCount++;
+        if (retryCount > MAX_RETRIES) {
+          throw new Error(`Survey rejected inputs after ${MAX_RETRIES} attempts on Page ${pageIndex}: ${submitResult.errors.join('; ')}`);
+        }
+
+        // Update current model with any returned errors, but keep the SAME pageIndex
+        currentPageModel = submitResult.nextPage;
+        currentPageUrl = submitResult.finalUrl;
+        session.currentPageData = this.toUiSurveyPage(currentPageModel, pageIndex);
+        session.currentAnswers = [];
+        this.notify(sessionId);
+        continue;
+      }
+
+      // SCREEN CONTENT GENUINELY CHANGED: Record completed stage in history
       const historyEntry: PageHistoryEntry = {
         pageIndex,
         pageTitle: currentPageModel.title,
@@ -362,7 +392,6 @@ export class SurveyEngine {
       session.history.push(historyEntry);
       session.totalQuestionsAnswered += uiAnswers.length;
       session.totalSimulatedDelayMs += totalDelayForScreen;
-      this.notify(sessionId);
 
       // Check if survey redirected to a different survey
       const redirectCheck = this.detectSurveyRedirection(
@@ -382,29 +411,57 @@ export class SurveyEngine {
         );
       }
 
-      // Check if validation errors returned on new page
-      if (submitResult.hasErrors) {
-        this.addLog(
-          ctx,
-          'warn',
-          `Validation feedback returned from survey: "${submitResult.errors.join(', ')}". Applying corrective inputs...`
-        );
-        retryCount++;
-        if (retryCount > MAX_RETRIES) {
-          throw new Error(`Survey rejected inputs after ${MAX_RETRIES} attempts: ${submitResult.errors.join('; ')}`);
-        }
-        currentPageModel = submitResult.nextPage;
-        currentPageUrl = submitResult.finalUrl;
-        continue;
-      }
+      this.notify(sessionId);
 
-      // Successful page advance
+      // Successful page advance to new screen
       retryCount = 0;
       currentPageModel = submitResult.nextPage;
       currentPageUrl = submitResult.finalUrl;
       pageIndex++;
       session.currentPageIndex = pageIndex;
+      session.totalEstimatedPages = Math.max(pageIndex, session.totalEstimatedPages);
+      this.addLog(ctx, 'success', `Screen content transitioned. Advanced to Page ${pageIndex}.`);
     }
+  }
+
+  public hasScreenContentChanged(currentModel: PageModel, nextModel: PageModel): boolean {
+    if (!currentModel || !nextModel) return true;
+    if (nextModel.completed) return true;
+
+    // 1. If form action or target URL changed to a different path
+    if (currentModel.url !== nextModel.url) {
+      try {
+        const u1 = new URL(currentModel.url, 'http://localhost:3000');
+        const u2 = new URL(nextModel.url, 'http://localhost:3000');
+        if (u1.pathname !== u2.pathname || u1.search !== u2.search) {
+          return true;
+        }
+      } catch {}
+    }
+
+    // 2. Compare question identities, titles, and field names
+    const q1Signature = currentModel.questions
+      .map(q => `${q.id}::${q.text.trim()}::${q.fields.map(f => f.name).sort().join(',')}`)
+      .join('||');
+    const q2Signature = nextModel.questions
+      .map(q => `${q.id}::${q.text.trim()}::${q.fields.map(f => f.name).sort().join(',')}`)
+      .join('||');
+
+    if (q1Signature !== q2Signature) {
+      return true;
+    }
+
+    // 3. Compare title
+    if (currentModel.title.trim() !== nextModel.title.trim()) {
+      return true;
+    }
+
+    // 4. Compare form action
+    if (currentModel.form.action !== nextModel.form.action) {
+      return true;
+    }
+
+    return false;
   }
 
   private detectSurveyRedirection(
@@ -876,7 +933,7 @@ export class SurveyEngine {
     );
   }
 
-  private injectPreviewAugmentations(
+  public injectPreviewAugmentations(
     rawHtml: string,
     targetUrl: string,
     answers: QuestionAnswer[],
@@ -921,45 +978,55 @@ export class SurveyEngine {
       </style>
       <script>
         (function() {
-          const answers = ${safeAnswersJson};
-          function applyAnswers() {
-            answers.forEach(function(ans) {
-              // 1. Radio and checkboxes matching values
-              ans.selectedValues.forEach(function(val) {
-                const inputs = document.querySelectorAll('input[value="' + CSS.escape(val) + '"], input[name*="' + CSS.escape(ans.questionId) + '"][value="' + CSS.escape(val) + '"]');
-                inputs.forEach(function(input) {
-                  input.checked = true;
-                  const label = input.closest('label') || document.querySelector('label[for="' + input.id + '"]');
-                  if (label) {
-                    label.classList.add('__sr_auto_answered__');
-                    if (!label.querySelector('.__sr_answer_badge__')) {
-                      const badge = document.createElement('span');
-                      badge.className = '__sr_answer_badge__';
-                      badge.textContent = '✓ AUTO-SELECTED';
-                      label.appendChild(badge);
-                    }
-                  } else {
-                    input.classList.add('__sr_auto_answered__');
-                  }
+          try {
+            const answers = ${safeAnswersJson};
+            function applyAnswers() {
+              if (!Array.isArray(answers)) return;
+              answers.forEach(function(ans) {
+                // 1. Radio and checkboxes matching values
+                (ans.selectedValues || []).forEach(function(val) {
+                  try {
+                    const sel = 'input[value="' + CSS.escape(val) + '"], input[name*="' + CSS.escape(ans.questionId) + '"][value="' + CSS.escape(val) + '"]';
+                    const inputs = document.querySelectorAll(sel);
+                    inputs.forEach(function(input) {
+                      input.checked = true;
+                      const label = input.closest('label') || (input.id ? document.querySelector('label[for="' + CSS.escape(input.id) + '"]') : null);
+                      if (label) {
+                        label.classList.add('__sr_auto_answered__');
+                        if (!label.querySelector('.__sr_answer_badge__')) {
+                          const badge = document.createElement('span');
+                          badge.className = '__sr_answer_badge__';
+                          badge.textContent = '✓ AUTO-SELECTED';
+                          label.appendChild(badge);
+                        }
+                      } else {
+                        input.classList.add('__sr_auto_answered__');
+                      }
+                    });
+                  } catch (err) {}
                 });
-              });
 
-              // 2. Text response
-              if (ans.textResponse) {
-                const textInputs = document.querySelectorAll('textarea, input[type="text"], input:not([type])');
-                textInputs.forEach(function(ti) {
-                  if (!ti.value) {
-                    ti.value = ans.textResponse;
-                    ti.classList.add('__sr_auto_answered__');
-                  }
-                });
-              }
-            });
-          }
-          if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', applyAnswers);
-          } else {
-            applyAnswers();
+                // 2. Text response
+                if (ans.textResponse) {
+                  try {
+                    const textInputs = document.querySelectorAll('textarea, input[type="text"], input:not([type])');
+                    textInputs.forEach(function(ti) {
+                      if (!ti.value) {
+                        ti.value = ans.textResponse;
+                        ti.classList.add('__sr_auto_answered__');
+                      }
+                    });
+                  } catch (err) {}
+                }
+              });
+            }
+            if (document.readyState === 'loading') {
+              document.addEventListener('DOMContentLoaded', applyAnswers);
+            } else {
+              applyAnswers();
+            }
+          } catch (e) {
+            console.warn('[AutoSurvey preview error]', e);
           }
         })();
       </script>
