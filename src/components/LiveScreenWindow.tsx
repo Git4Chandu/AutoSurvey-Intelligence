@@ -50,7 +50,7 @@ export const LiveScreenWindow: React.FC<LiveScreenWindowProps> = ({
   const [loadingHtml, setLoadingHtml] = useState<boolean>(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [useDirectSrc, setUseDirectSrc] = useState<boolean>(false);
-  const [showInspector, setShowInspector] = useState<boolean>(true);
+  const [showInspector, setShowInspector] = useState<boolean>(false);
   const [selectedQuestionId, setSelectedQuestionId] = useState<string | null>(null);
 
   const currentPageIndex = selectedPageIndex ?? session?.currentPageIndex ?? 1;
@@ -227,7 +227,7 @@ export const LiveScreenWindow: React.FC<LiveScreenWindowProps> = ({
   return (
     <div
       id="live-screen-window"
-      className={`flex flex-col bg-[#0F172A] border border-[#1E293B] rounded-xl overflow-hidden shadow-2xl ${className}`}
+      className={`flex flex-col bg-[#0F172A] border border-[#1E293B] rounded-xl overflow-hidden shadow-2xl h-[calc(100vh-18rem)] min-h-[540px] ${className}`}
     >
       {/* Window Chrome Title Bar */}
       <div className="flex items-center justify-between px-3.5 py-2.5 bg-[#080D1A] border-b border-[#1E293B] select-none">
@@ -361,7 +361,7 @@ export const LiveScreenWindow: React.FC<LiveScreenWindowProps> = ({
           </div>
 
           {/* Horizontal scrollable question pills / cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-36 overflow-y-auto pr-1">
             {activePageData.questions.map((q, idx) => {
               const ans = activeAnswers.find(a => a.questionId === q.id);
               const isSelected = selectedQuestionId === q.id || (!selectedQuestionId && idx === 0);
@@ -433,8 +433,8 @@ export const LiveScreenWindow: React.FC<LiveScreenWindowProps> = ({
         </div>
       )}
 
-      {/* Main Iframe Viewport */}
-      <div className="relative flex-1 min-h-[520px] h-[640px] bg-white overflow-hidden">
+      {/* Main Iframe Viewport — flex-1 fills all remaining height in the component */}
+      <div className="relative flex-1 min-h-0 bg-white overflow-hidden">
         {loadingHtml && (
           <div className="absolute inset-0 bg-[#030712]/90 backdrop-blur-xs z-20 flex flex-col items-center justify-center text-slate-300 font-mono text-xs p-4 text-center">
             <RefreshCw className="w-7 h-7 text-emerald-400 animate-spin mb-3" />

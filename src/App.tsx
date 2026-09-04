@@ -204,7 +204,7 @@ export default function App() {
   const displayPageData = session?.currentPageData || inspectedPage;
 
   return (
-    <div className="min-h-screen bg-[#0A0A0B] text-slate-100 font-sans flex flex-col selection:bg-emerald-900 selection:text-emerald-100">
+    <div className="h-screen overflow-hidden bg-[#0A0A0B] text-slate-100 font-sans flex flex-col selection:bg-emerald-900 selection:text-emerald-100">
       {/* Header bar */}
       <Header
         status={currentStatus}
@@ -214,7 +214,7 @@ export default function App() {
         totalEstimatedPages={session?.totalEstimatedPages || 1}
       />
 
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-5">
+      <main className="flex-1 min-h-0 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-col gap-5">
         {/* Survey URL Input & Controls */}
         <UrlInputBar
           url={url}
@@ -347,13 +347,13 @@ export default function App() {
           )}
         </div>
 
-        {/* Tab Contents */}
-        <div className="pt-2">
+        {/* Tab Contents — flex-1 so this area fills all remaining viewport height */}
+        <div className="flex-1 min-h-0 pt-2 flex flex-col">
           {/* Split View: Questions + Live Screen Window Side-by-Side */}
           {activeTab === 'split' && (
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-6 lg:items-stretch">
               {/* Left column: Questions and Rationale */}
-              <div className="lg:col-span-5 space-y-4">
+              <div className="lg:col-span-5 space-y-4 min-h-0 overflow-y-auto">
                 <QuestionsView
                   currentPageData={displayPageData}
                   currentAnswers={session?.currentAnswers || []}
@@ -366,14 +366,15 @@ export default function App() {
                 />
               </div>
 
-              {/* Right column: Interactive Live Screen Window */}
-              <div className="lg:col-span-7 space-y-4">
+              {/* Right column: Interactive Live Screen Window — fills full column height */}
+              <div className="lg:col-span-7 flex flex-col min-h-0">
                 <LiveScreenWindow
                   session={session}
                   selectedPageIndex={selectedScreenPageIndex}
                   onSelectPageIndex={setSelectedScreenPageIndex}
                   fallbackSurveyUrl={url}
                   inspectedPage={inspectedPage}
+                  className="flex-1 min-h-0"
                 />
               </div>
             </div>

@@ -76,6 +76,49 @@ export class BrowserClient {
     fieldValues: Record<string, string | string[]>,
     platformSubmitSelectors?: string[]
   ): Promise<BrowserNavigateResult> {
+    // DEBUG: snapshot page structure for _input fields before filling
+    const _hasSxMFields = Object.keys(fieldValues).some(k => k.includes('S3xM') || k.includes('_input'));
+    if (_hasSxMFields) {
+      const _pageDiag = await this.pg.evaluate(() => {
+        const allRoles = Array.from(new Set(
+          Array.from(document.querySelectorAll('[role]')).map(function(el) { return el.getAttribute('role'); })
+        ));
+        const allSels = Array.from(document.querySelectorAll('select')).map(function(s) {
+          return { name: (s as HTMLSelectElement).name, id: s.id, optCount: (s as HTMLSelectElement).options.length };
+        });
+        const allInps = Array.from(document.querySelectorAll('input:not([type="hidden"])')).map(function(i) {
+          return { name: (i as HTMLInputElement).name, id: i.id, type: (i as HTMLInputElement).type };
+        });
+        const gS3 = document.getElementById('gS3_hidden');
+        const mainForm = document.querySelector('.cf-page__main') || document.querySelector('[role="form"]');
+        const questionEl = document.querySelector('.cf-question') || document.querySelector('.cf-page__question');
+        return {
+          allRoles: allRoles,
+          allSelects: allSels,
+          allInputs: allInps,
+          gS3State: gS3 ? { id: gS3.id, innerHTML: gS3.innerHTML.substring(0, 300) } : null,
+          questionHTML: questionEl ? questionEl.innerHTML.substring(0, 2000) : null,
+        };
+      });
+      console.log('[BrowserClient] Page structure diag:', JSON.stringify(_pageDiag));
+    }
+
+    // For Confirmit responsive grid fields (mobile_*_input only — desktop variants
+    // map to the same gS3_hidden fields and would cause double-injection):
+    // page.select() by ID fires Confirmit's jQuery change handler.
+    for (const _key of Object.keys(fieldValues)) {
+      if (_key.startsWith('mobile_') && _key.endsWith('_input') && !Array.isArray(fieldValues[_key])) {
+        const _idSel = 'select#' + _key;
+        try {
+          const _el = await this.pg.$(_idSel);
+          if (_el) {
+            await this.pg.select(_idSel, String(fieldValues[_key]));
+            await new Promise(r => setTimeout(r, 300));
+          }
+        } catch (_err: any) { /* value not in select options — skip */ }
+      }
+    }
+
     // NOTE: No named inner functions inside evaluate() — tsx/esbuild injects
     // __name() helpers for them which are undefined in the browser sandbox.
     await this.pg.evaluate((fields: Record<string, string | string[]>) => {
@@ -123,50 +166,72 @@ export class BrowserClient {
               radio.dispatchEvent(new Event('change', { bubbles: true }));
             }
           } else {
-            // Confirmit custom widget: inject directly into #{name}_hidden container inside the form.
-            // Confirmit's server only checks the POST body — bypassing the cf-radio widget is safe.
-            // Some Confirmit fields have an "_input" suffix on the visible text input (autocomplete/age grid)
-            // while the actual form field and hidden container use the name without "_input".
-            const baseName = en.replace(/_input$/, '');
-            let container = document.getElementById(en + '_hidden') || document.getElementById(baseName + '_hidden');
-            if (container) {
-              const actualName = container.id.replace(/_hidden$/, '');
-              const old = container.querySelector('input[name="' + actualName + '"]');
-              if (old) old.remove();
-              const inp = document.createElement('input');
-              inp.type = 'hidden'; inp.name = actualName; inp.value = ev;
-              container.appendChild(inp);
-            } else {
-              // Fallback 2: Confirmit grid/matrix — container ID differs from field name.
-              // Extract row number from field name (e.g. "1" from "mobile_S3xM_1_input"),
-              // inject into any empty cf-page__question-hidden-fields using its base ID
-              // as the actual form field name prefix (e.g. gS3_1 into gS3_hidden).
-              const rowMatch = en.match(/_(\d+)(?:_input)?$/);
-              const row = rowMatch ? rowMatch[1] : '';
-              const emptyContainers = Array.from(
-                document.querySelectorAll('.cf-page__question-hidden-fields:empty')
-              ) as HTMLElement[];
-              let injectedIntoGrid = false;
-              for (let ci = 0; ci < emptyContainers.length; ci++) {
-                const c = emptyContainers[ci];
-                const cBase = c.id.replace(/_hidden$/, '');
-                const fieldName = row ? cBase + '_' + row : cBase;
-                const hidden = document.createElement('input');
-                hidden.type = 'hidden'; hidden.name = fieldName; hidden.value = ev;
-                c.appendChild(hidden);
-                injectedIntoGrid = true;
+            // For Confirmit responsive grid fields (name ends with "_input"),
+            // look up the option label from the native select and click the matching
+            // cf-radio so Confirmit's own click handler populates _hidden correctly.
+            // (Direct injection into _hidden is unreliable because Confirmit's submit
+            // handler re-derives the hidden value from cf-radio selection state.)
+            let cfRadioClicked = false;
+            if (en.endsWith('_input')) {
+              const nativeSel = document.querySelector('select[name="' + en + '"]') as HTMLSelectElement | null;
+              if (nativeSel) {
+                const optEl = nativeSel.querySelector('option[value="' + ev + '"]') as HTMLOptionElement | null;
+                const labelText = optEl ? (optEl.textContent || '').trim() : '';
+                if (labelText) {
+                  const cfRadios = Array.from(document.querySelectorAll('[role="radio"]')) as HTMLElement[];
+                  for (let ri = 0; ri < cfRadios.length; ri++) {
+                    if ((cfRadios[ri].textContent || '').trim() === labelText) {
+                      const jqInner = (window as any).jQuery || (window as any).$;
+                      if (jqInner) { jqInner(cfRadios[ri]).trigger('click'); }
+                      else { cfRadios[ri].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); }
+                      cfRadioClicked = true;
+                      break;
+                    }
+                  }
+                }
               }
-              if (!injectedIntoGrid) {
-                // Fallback 3: generic text/select for non-Confirmit surveys
-                const inp = document.querySelector(
-                  'input[name="' + en + '"]:not([type="hidden"]):not([type="radio"]):not([type="checkbox"]),' +
-                  'textarea[name="' + en + '"],' +
-                  'select[name="' + en + '"]'
-                ) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
-                if (inp) {
-                  (inp as any).value = value as string;
-                  inp.dispatchEvent(new Event('input', { bubbles: true }));
-                  inp.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+
+            if (!cfRadioClicked) {
+              // Confirmit custom widget: inject directly into #{name}_hidden container inside the form.
+              const baseName = en.replace(/_input$/, '');
+              let container = document.getElementById(en + '_hidden') || document.getElementById(baseName + '_hidden');
+              if (container) {
+                const actualName = container.id.replace(/_hidden$/, '');
+                const old = container.querySelector('input[name="' + actualName + '"]');
+                if (old) old.remove();
+                const inp = document.createElement('input');
+                inp.type = 'hidden'; inp.name = actualName; inp.value = ev;
+                container.appendChild(inp);
+              } else {
+                // Fallback 2: Confirmit grid/matrix — container ID differs from field name.
+                const rowMatch = en.match(/_(\d+)(?:_input)?$/);
+                const row = rowMatch ? rowMatch[1] : '';
+                const emptyContainers = Array.from(
+                  document.querySelectorAll('.cf-page__question-hidden-fields:empty')
+                ) as HTMLElement[];
+                let injectedIntoGrid = false;
+                for (let ci = 0; ci < emptyContainers.length; ci++) {
+                  const c = emptyContainers[ci];
+                  const cBase = c.id.replace(/_hidden$/, '');
+                  const fieldName = row ? cBase + '_' + row : cBase;
+                  const hidden = document.createElement('input');
+                  hidden.type = 'hidden'; hidden.name = fieldName; hidden.value = ev;
+                  c.appendChild(hidden);
+                  injectedIntoGrid = true;
+                }
+                if (!injectedIntoGrid) {
+                  // Fallback 3: generic text/select for non-Confirmit surveys
+                  const inp = document.querySelector(
+                    'input[name="' + en + '"]:not([type="hidden"]):not([type="radio"]):not([type="checkbox"]),' +
+                    'textarea[name="' + en + '"],' +
+                    'select[name="' + en + '"]'
+                  ) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
+                  if (inp) {
+                    (inp as any).value = value as string;
+                    inp.dispatchEvent(new Event('input', { bubbles: true }));
+                    inp.dispatchEvent(new Event('change', { bubbles: true }));
+                  }
                 }
               }
             }
