@@ -9,6 +9,7 @@ import { GoogleGenAI } from '@google/genai';
 import { IAnswerProvider, AnswerContext } from './AnswerProvider.js';
 import { PageModel, PageAnswersModel } from '../questions/QuestionModel.js';
 import { TestAnswerProvider } from './TestAnswerProvider.js';
+import { isSelectPlaceholder } from '../parser/OptionParser.js';
 
 export class GeminiAnswerProvider implements IAnswerProvider {
   private fallbackProvider = new TestAnswerProvider();
@@ -56,14 +57,18 @@ export class GeminiAnswerProvider implements IAnswerProvider {
       required: q.required,
       instruction: q.instruction || null,
       errorMessage: q.errorMessage || null,
-      fields: q.fields.map(f => ({
-        name: f.name,
-        type: f.type,
-        label: f.label,
-        options: f.options?.map(o => ({ value: o.value, label: o.text })),
-        required: f.required,
-        placeholder: f.placeholder,
-      })),
+      fields: q.fields.map(f => {
+        const cleanOptions = f.options?.filter(o => !isSelectPlaceholder(o));
+        const effectiveOptions = cleanOptions && cleanOptions.length > 0 ? cleanOptions : f.options;
+        return {
+          name: f.name,
+          type: f.type,
+          label: f.label,
+          options: effectiveOptions?.map(o => ({ value: o.value, label: o.text || o.value })),
+          required: f.required,
+          placeholder: f.placeholder,
+        };
+      }),
     }));
 
     const systemPrompt = `You are AutoSurvey Intelligence, an advanced automated survey respondent analyzing and executing online surveys.
@@ -73,8 +78,8 @@ ${context.customPersonaPrompt ? `Special Persona Guidelines: ${context.customPer
 SURVEY QUESTION UNDERSTANDING & ANSWERING REQUIREMENTS:
 1. THOROUGHLY READ & UNDERSTAND each question's prompt, description, and instruction (e.g., "Select all that apply", "Choose your top 2", "Rank your satisfaction", "Explain why...").
 2. ADHERE TO CONSTRAINTS:
-   - If a question is required (required: true), you MUST provide an answer for its fields.
-   - For "radio" or single "select" (dropdowns): Choose EXACTLY ONE valid option value from the provided options list that best matches the respondent persona.
+   - If a question is required (required: true) or a dropdown/radio choice, you MUST provide an answer for its fields.
+   - For "radio" or single "select" (dropdowns): Choose EXACTLY ONE valid option value from the provided options list that best matches the respondent persona. Never choose placeholder values (like "", "-1", or "Select...").
    - For "checkbox": Return an array of strings with the selected option values. If instructions specify a number (e.g., "choose at least 2"), satisfy that condition.
    - For "text" or "textarea": Formulate a coherent, articulate, authentic human answer matching the persona (write at least 2-3 detailed sentences for open feedback textareas).
    - For "number" or "rating" or "scale": Provide a sensible number or rating value within the question's bounds.

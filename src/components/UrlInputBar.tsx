@@ -194,6 +194,17 @@ export const UrlInputBar: React.FC<UrlInputBarProps> = ({
           <div className="flex items-center gap-2">
             {!isRunning && !isPaused ? (
               <>
+                {status === 'error' && (
+                  <button
+                    onClick={onResume}
+                    title="Resume test from current survey page"
+                    className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider text-white bg-amber-600 hover:bg-amber-500 shadow-md transition-colors cursor-pointer"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-white" />
+                    <span>Resume Test</span>
+                  </button>
+                )}
+
                 <button
                   onClick={onInspect}
                   disabled={!url.trim() || isInspecting}

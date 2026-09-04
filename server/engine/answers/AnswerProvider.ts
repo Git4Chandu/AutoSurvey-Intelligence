@@ -10,6 +10,7 @@ export interface AnswerContext {
   pageIndex: number;
   surveyUrl: string;
   previousAnswers?: any[];
+  attemptIndex?: number;
 }
 
 export interface IAnswerProvider {

@@ -11,6 +11,8 @@
  * - Text, number, and textarea fields
  */
 import { PageModel, PageAnswersModel } from '../questions/QuestionModel.js';
+import { isSelectPlaceholder } from '../parser/OptionParser.js';
+import { FieldParser } from '../parser/FieldParser.js';
 
 export class FormBuilder {
   /**
@@ -42,11 +44,37 @@ export class FormBuilder {
         } else {
           // Single value: dropdown, radio, text, number
           params.append(fieldName, String(val));
+
+          // If fieldName had a responsive prefix or suffix, ALSO ensure canonical field name is posted
+          const canonical = FieldParser.normalizeFieldName(fieldName);
+          if (canonical && canonical !== fieldName && !params.has(canonical)) {
+            params.append(canonical, String(val));
+          }
         }
       }
     }
 
-    // 3. If there is a revision field required by Confirmit and not yet added
+    // 3. Guarantee all dropdown (select) fields on the page are included in payload
+    for (const question of pageModel.questions) {
+      for (const field of question.fields) {
+        if (field.type === 'select') {
+          const canonical = FieldParser.normalizeFieldName(field.name);
+          const hasField = params.has(field.name) || (canonical && params.has(canonical));
+          if (!hasField) {
+            const nonPlaceholders = field.options?.filter(o => !isSelectPlaceholder(o));
+            const opt = nonPlaceholders && nonPlaceholders.length > 0 ? nonPlaceholders[0] : field.options?.[0];
+            if (opt && opt.value !== undefined && opt.value !== '') {
+              params.append(field.name, opt.value);
+              if (canonical && canonical !== field.name && !params.has(canonical)) {
+                params.append(canonical, opt.value);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // 4. If there is a revision field required by Confirmit and not yet added
     if (pageModel.revision && !params.has('revision')) {
       params.append('revision', pageModel.revision);
     }

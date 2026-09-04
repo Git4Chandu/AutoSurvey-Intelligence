@@ -9,6 +9,7 @@ import type { Element } from 'domhandler';
 import { QuestionModel, QuestionField } from '../questions/QuestionModel.js';
 import { QuestionTypeEnum } from '../questions/QuestionTypes.js';
 import { FieldParser } from './FieldParser.js';
+import { OptionParser } from './OptionParser.js';
 
 export class QuestionParser {
   /**
@@ -27,26 +28,90 @@ export class QuestionParser {
       }
     });
 
-    // 2. Generic survey question containers if no Confirmit questions found
-    if (questions.length === 0) {
-      $('.question, [data-question-id], fieldset.survey-group, .form-group, .survey-question').each((i, el) => {
-        const q = this.parseQuestionElement($, el, i, cfApiList);
-        if (q && !processedQuestionIds.has(q.id)) {
+    // 2. Generic survey question containers (capture any additional questions on the page)
+    $('.question, [data-question-id], fieldset.survey-group, .form-group, .survey-question, .cf-dropdown').each((i, el) => {
+      // Skip if this container is inside an already processed container
+      if ($(el).closest('.cf-question').length > 0) return;
+
+      const q = this.parseQuestionElement($, el, questions.length + i, cfApiList);
+      if (q && !processedQuestionIds.has(q.id)) {
+        // Only add if it introduces at least one new field
+        const hasNewField = q.fields.length > 0 && q.fields.some(f => {
+          return !questions.some(existingQ => existingQ.fields.some(ef => ef.name === f.name));
+        });
+        if (hasNewField || q.fields.length === 0) {
           processedQuestionIds.add(q.id);
           questions.push(q);
         }
-      });
+      }
+    });
+
+    // 3. Guarantee all <select> elements in any <form> are parsed (prevent unhandled dropdowns)
+    const existingFieldNames = new Set<string>();
+    for (const q of questions) {
+      for (const f of q.fields) {
+        existingFieldNames.add(f.name);
+      }
     }
 
-    // 3. If still no questions found, check if there are orphan inputs/selects inside the form
+    $('select').each((i, sel) => {
+      const rawName = $(sel).attr('name');
+      const rawId = $(sel).attr('id') || '';
+      const name = rawName ? rawName.trim() : (FieldParser.normalizeFieldName(rawId) || rawId || `select_${i + 1}`);
+      if (existingFieldNames.has(name)) return;
+
+      const qId = rawId ? FieldParser.normalizeFieldName(rawId) : name;
+      if (processedQuestionIds.has(qId)) return;
+
+      const parentContainer = $(sel).closest('.form-group, .question, .cf-question, .cf-dropdown, fieldset, tr, p, div');
+      let labelText =
+        $(`label[for="${rawId}"]`).text().trim() ||
+        $(sel).prev('label').text().trim() ||
+        $(sel).closest('label').text().trim() ||
+        parentContainer.find('.question-title, .cf-question__text, label, h3, h4, strong').first().text().trim() ||
+        $(sel).attr('placeholder') ||
+        '';
+
+      if (!labelText) {
+        const placeholderOpt = $(sel).find('option[value=""], option:not([value])').first().text().trim();
+        if (placeholderOpt && !/^(--|\.\.\.)?\s*(please\s+)?select\b/i.test(placeholderOpt)) {
+          labelText = placeholderOpt;
+        } else {
+          labelText = name;
+        }
+      }
+
+      const options = OptionParser.parseSelectOptions($, sel);
+      const isRequired = $(sel).attr('required') !== undefined || $(sel).attr('aria-required') === 'true';
+
+      const fields: QuestionField[] = [{
+        name,
+        type: 'select',
+        required: isRequired,
+        options,
+        label: labelText,
+        defaultValue: $(sel).find('option[selected]').attr('value') || undefined,
+      }];
+
+      existingFieldNames.add(name);
+      processedQuestionIds.add(qId);
+      questions.push({
+        id: qId,
+        text: labelText,
+        type: 'DROPDOWN',
+        required: isRequired,
+        fields,
+      });
+    });
+
+    // 4. If still no questions found, check for other orphan inputs inside form
     if (questions.length === 0) {
       $('form').each((_, formEl) => {
-        const selects = $(formEl).find('select');
         const radios = $(formEl).find('input[type="radio"]');
         const checkboxes = $(formEl).find('input[type="checkbox"]');
         const texts = $(formEl).find('input[type="text"], textarea');
 
-        if (selects.length > 0 || radios.length > 0 || checkboxes.length > 0 || texts.length > 0) {
+        if (radios.length > 0 || checkboxes.length > 0 || texts.length > 0) {
           const fields = FieldParser.parseFields($, formEl as any, 'Q_main');
           if (fields.length > 0) {
             questions.push({
@@ -170,9 +235,13 @@ export class QuestionParser {
     if (selectFields.length > 1) {
       return 'MULTI_DROPDOWN';
     }
-    if (selectFields.length === 1 && fields.length === 1) {
+    if (selectFields.length === 1 && (fields.length === 1 || selectFields.length === fields.length)) {
       return 'DROPDOWN';
     }
+
+    if (cfData?.dropdown) return 'DROPDOWN';
+    if (cfData?.nodeType === 'Grid3d' && selectFields.length > 0) return 'MULTI_DROPDOWN';
+    if (Array.isArray(cfData?.questions) && cfData.questions.some((q: any) => q.dropdown)) return 'MULTI_DROPDOWN';
 
     const radioFields = fields.filter(f => f.type === 'radio');
     if (radioFields.length === 1 && fields.length === 1) {

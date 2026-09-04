@@ -209,17 +209,32 @@ export class SurveyEngine {
 
   public resumeSession(sessionId: string) {
     const ctx = this.sessions.get(sessionId);
-    if (!ctx || ctx.session.status !== 'paused') return;
+    if (!ctx) return;
 
-    ctx.session.status = 'delaying';
-    this.addLog(ctx, 'info', 'Resuming survey automation sequence...');
-    if (ctx.pauseResolver) {
-      const resolve = ctx.pauseResolver;
-      ctx.pausePromise = null;
-      ctx.pauseResolver = null;
-      resolve();
+    if (ctx.session.status === 'paused') {
+      ctx.session.status = 'delaying';
+      this.addLog(ctx, 'info', 'Resuming survey automation sequence...');
+      if (ctx.pauseResolver) {
+        const resolve = ctx.pauseResolver;
+        ctx.pausePromise = null;
+        ctx.pauseResolver = null;
+        resolve();
+      }
+      this.notify(sessionId);
+    } else if (ctx.session.status === 'error') {
+      // Re-trigger execution loop on resume
+      ctx.session.status = 'answering';
+      ctx.session.errorMessage = undefined;
+      ctx.abortController = new AbortController();
+      this.addLog(ctx, 'info', 'Resuming survey test execution from current stage...');
+      this.notify(sessionId);
+      this.executeSurveyLoop(sessionId).catch(err => {
+        console.error(`[SurveyEngine] Session ${sessionId} error on resume:`, err);
+        ctx.session.status = 'error';
+        ctx.session.errorMessage = err.message || 'Survey execution failed';
+        this.notify(sessionId);
+      });
     }
-    this.notify(sessionId);
   }
 
   public stopSession(sessionId: string) {
@@ -265,7 +280,7 @@ export class SurveyEngine {
     let currentPageUrl = session.surveyUrl;
     let pageIndex = 1;
     let retryCount = 0;
-    const MAX_RETRIES = 3;
+    const MAX_RETRIES = 10;
 
     // STEP 1: Initial page load (browser-rendered or plain fetch)
     session.status = 'fetching';
@@ -315,13 +330,7 @@ export class SurveyEngine {
       // STEP 2: Answering Phase
       let pageAnswers: PageAnswersModel = {};
 
-      // If page is hidden in live and has NO errors, try submitting without answers first (e.g. testing setup screen)
-      const isCleanHiddenScreen =
-        currentPageModel.isHiddenPage &&
-        currentPageModel.errors.length === 0 &&
-        retryCount === 0;
-
-      if (!isCleanHiddenScreen && !currentPageModel.isInfoOnly) {
+      if (!currentPageModel.isInfoOnly && currentPageModel.questions.length > 0) {
         this.addLog(ctx, 'action', `Formulating responses for ${currentPageModel.questions.length} questions...`);
 
         pageAnswers = await ctx.answerProvider.getAnswers(currentPageModel, {
@@ -329,6 +338,7 @@ export class SurveyEngine {
           customPersonaPrompt: session.config.customPersonaPrompt,
           pageIndex,
           surveyUrl: currentPageUrl,
+          attemptIndex: retryCount,
         });
 
         // STEP 3: Validation & Auto-Repair (README Section 15, 18)
@@ -392,19 +402,26 @@ export class SurveyEngine {
       // If validation feedback returned OR screen content remained identical:
       // DO NOT increment pageIndex and DO NOT log as a finished stage!
       if (submitResult.hasErrors || !screenChanged) {
+        retryCount++;
         const feedbackReason = submitResult.hasErrors
           ? `Validation feedback returned from survey: "${submitResult.errors.join(', ')}"`
           : 'Survey form re-rendered same page (inputs rejected or next step not triggered)';
 
-        this.addLog(
-          ctx,
-          'warn',
-          `${feedbackReason}. Page count remains at ${pageIndex}. Re-evaluating question requirements and submitting corrective responses...`
-        );
-
-        retryCount++;
-        if (retryCount > MAX_RETRIES) {
-          throw new Error(`Survey rejected inputs after ${MAX_RETRIES} attempts on Page ${pageIndex}: ${submitResult.errors.join('; ')}`);
+        // Requirement: Resume test if more than 10 attempts happened on same page
+        if (retryCount >= MAX_RETRIES) {
+          this.addLog(
+            ctx,
+            'warn',
+            `Notice: ${retryCount} attempts reached on Page ${pageIndex}. Resuming survey test execution with alternative option permutations and relaxed constraints...`
+          );
+          // Reset retry counter to resume test execution smoothly without crashing
+          retryCount = 0;
+        } else {
+          this.addLog(
+            ctx,
+            'warn',
+            `${feedbackReason}. Attempt ${retryCount} of ${MAX_RETRIES} on Page ${pageIndex}. Re-evaluating question requirements and submitting corrective responses...`
+          );
         }
 
         // Update current model with any returned errors, but keep the SAME pageIndex
@@ -415,6 +432,9 @@ export class SurveyEngine {
         this.notify(sessionId);
         continue;
       }
+
+      // Successfully advanced to next screen: reset retry counter
+      retryCount = 0;
 
       // SCREEN CONTENT GENUINELY CHANGED: Record completed stage in history
       const historyEntry: PageHistoryEntry = {
@@ -480,7 +500,11 @@ export class SurveyEngine {
       } catch {}
     }
 
-    // 2. Compare question identities, titles, and field names
+    // 2. Compare question count, identities, titles, and field names
+    if (currentModel.questions.length !== nextModel.questions.length) {
+      return true;
+    }
+
     const q1Signature = currentModel.questions
       .map(q => `${q.id}::${q.text.trim()}::${q.fields.map(f => f.name).sort().join(',')}`)
       .join('||');
@@ -500,6 +524,18 @@ export class SurveyEngine {
     // 4. Compare form action
     if (currentModel.form.action !== nextModel.form.action) {
       return true;
+    }
+
+    // 5. Compare hidden state indicating step/page progression
+    const stepKeys = ['step', 'page', '__pagemasterid', '__page', 'currentstep', 'current_step', 'p'];
+    for (const key of stepKeys) {
+      if (
+        currentModel.hiddenFields[key] &&
+        nextModel.hiddenFields[key] &&
+        currentModel.hiddenFields[key] !== nextModel.hiddenFields[key]
+      ) {
+        return true;
+      }
     }
 
     return false;
@@ -837,10 +873,10 @@ export class SurveyEngine {
           uiType = q.fields[0]?.type === 'select' ? 'select' : 'radio';
           break;
         case 'DROPDOWN':
+        case 'MULTI_DROPDOWN':
           uiType = 'select';
           break;
         case 'MULTIPLE':
-        case 'MULTI_DROPDOWN':
           uiType = 'checkbox';
           break;
         case 'TEXT':
@@ -872,8 +908,8 @@ export class SurveyEngine {
       for (const [fName, val] of Object.entries(qAns.fields)) {
         if (Array.isArray(val)) {
           values.push(...val.map(String));
-        } else if (typeof val === 'string' && val.length > 20) {
-          textResponse = val;
+        } else if (uiType === 'text' || uiType === 'textarea') {
+          textResponse = String(val);
         } else if (val !== undefined && val !== null) {
           values.push(String(val));
         }
@@ -907,6 +943,7 @@ export class SurveyEngine {
         questionDescription: q.instruction || undefined,
         optionsSummary: optionsSummary.length > 0 ? optionsSummary : undefined,
         inputName: q.fields[0]?.name,
+        fieldAnswers: qAns.fields,
       });
     }
 
@@ -1026,13 +1063,97 @@ export class SurveyEngine {
             function applyAnswers() {
               if (!Array.isArray(answers)) return;
               answers.forEach(function(ans) {
-                // 1. Radio and checkboxes matching values
+                // 1. Dropdown / Select elements by fieldAnswers
+                if (ans.fieldAnswers && typeof ans.fieldAnswers === 'object') {
+                  Object.keys(ans.fieldAnswers).forEach(function(fieldName) {
+                    const val = ans.fieldAnswers[fieldName];
+                    if (val === undefined || val === null || val === '') return;
+                    try {
+                      const cleanField = fieldName.replace(/^(?:mobile_|desktop_)/i, '').replace(/_input$/i, '');
+                      const selQueries = [
+                        'select[name="' + CSS.escape(fieldName) + '"]',
+                        'select[name="' + CSS.escape(cleanField) + '"]',
+                        'select#' + CSS.escape(fieldName),
+                        'select#' + CSS.escape(cleanField),
+                        'select#mobile_' + CSS.escape(cleanField) + '_input',
+                        'select#desktop_' + CSS.escape(cleanField) + '_input',
+                        'select[id*="' + CSS.escape(cleanField) + '"]'
+                      ];
+                      const matchedSelects = Array.from(document.querySelectorAll(selQueries.join(', ')));
+                      matchedSelects.forEach(function(sel) {
+                        sel.value = String(val);
+                        const opt = sel.querySelector('option[value="' + CSS.escape(String(val)) + '"]');
+                        if (opt) opt.selected = true;
+                        sel.classList.add('__sr_auto_answered__');
+                        try {
+                          sel.dispatchEvent(new Event('change', { bubbles: true }));
+                          sel.dispatchEvent(new Event('input', { bubbles: true }));
+                        } catch (e) {}
+
+                        const container = sel.closest('.cf-grid-layout__row, .form-group, .question, .cf-question, .cf-dropdown, td') || sel.parentElement;
+                        if (container && !container.querySelector('.__sr_answer_badge__')) {
+                          const badge = document.createElement('span');
+                          badge.className = '__sr_answer_badge__';
+                          badge.textContent = '✓ AUTO-SELECTED (' + val + ')';
+                          container.appendChild(badge);
+                        }
+                      });
+                    } catch (e) {}
+                  });
+                }
+
+                // 1b. Dropdown / Select elements by selectedValues fallback
+                (ans.selectedValues || []).forEach(function(val) {
+                  try {
+                    let selects = [];
+                    if (ans.inputName) {
+                      selects = Array.from(document.querySelectorAll('select[name="' + CSS.escape(ans.inputName) + '"], select#' + CSS.escape(ans.inputName)));
+                    }
+                    if (selects.length === 0 && ans.questionId) {
+                      selects = Array.from(document.querySelectorAll('#' + CSS.escape(ans.questionId) + ' select, [data-question-id="' + CSS.escape(ans.questionId) + '"] select, .cf-question[id*="' + CSS.escape(ans.questionId) + '"] select'));
+                    }
+                    if (selects.length === 0) {
+                      const matchingOptions = document.querySelectorAll('select option[value="' + CSS.escape(val) + '"]');
+                      matchingOptions.forEach(function(opt) {
+                        const parentSel = opt.closest('select');
+                        if (parentSel && !selects.includes(parentSel)) selects.push(parentSel);
+                      });
+                    }
+
+                    selects.forEach(function(sel) {
+                      sel.value = val;
+                      const opt = sel.querySelector('option[value="' + CSS.escape(val) + '"]');
+                      if (opt) opt.selected = true;
+                      sel.classList.add('__sr_auto_answered__');
+
+                      try {
+                        sel.dispatchEvent(new Event('change', { bubbles: true }));
+                        sel.dispatchEvent(new Event('input', { bubbles: true }));
+                      } catch (e) {}
+
+                      const container = sel.closest('.form-group, .question, .cf-question, .cf-dropdown') || sel.parentElement;
+                      if (container && !container.querySelector('.__sr_answer_badge__')) {
+                        const badge = document.createElement('span');
+                        badge.className = '__sr_answer_badge__';
+                        badge.textContent = '✓ AUTO-SELECTED';
+                        container.appendChild(badge);
+                      }
+                    });
+                  } catch (err) {}
+                });
+
+                // 2. Radio and checkboxes matching values
                 (ans.selectedValues || []).forEach(function(val) {
                   try {
                     const sel = 'input[value="' + CSS.escape(val) + '"], input[name*="' + CSS.escape(ans.questionId) + '"][value="' + CSS.escape(val) + '"]';
                     const inputs = document.querySelectorAll(sel);
                     inputs.forEach(function(input) {
                       input.checked = true;
+                      try {
+                        input.dispatchEvent(new Event('change', { bubbles: true }));
+                        input.dispatchEvent(new Event('click', { bubbles: true }));
+                      } catch (e) {}
+
                       const label = input.closest('label') || (input.id ? document.querySelector('label[for="' + CSS.escape(input.id) + '"]') : null);
                       if (label) {
                         label.classList.add('__sr_auto_answered__');
@@ -1049,7 +1170,7 @@ export class SurveyEngine {
                   } catch (err) {}
                 });
 
-                // 2. Text response
+                // 3. Text response
                 if (ans.textResponse) {
                   try {
                     const textInputs = document.querySelectorAll('textarea, input[type="text"], input:not([type])');

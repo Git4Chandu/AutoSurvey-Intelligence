@@ -68,7 +68,9 @@ export class PageParser {
 
     // 5. Extract validation error messages
     const errors: string[] = [];
-    $('.cf-error-list li, .cf-error-block:not(.cf-error-block--hidden) li, .alert-danger, .error-message').each((_, el) => {
+    $(
+      '.cf-error-list li, .cf-error-block:not(.cf-error-block--hidden) li, .alert-danger, .error-message, .error-summary li, .validation-summary-errors li, .invalid-feedback, [role="alert"]'
+    ).each((_, el) => {
       const txt = $(el).text().trim();
       if (txt && !errors.includes(txt)) {
         errors.push(txt);

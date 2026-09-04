@@ -7,6 +7,7 @@
  */
 import { IAnswerProvider, AnswerContext } from './AnswerProvider.js';
 import { PageModel, PageAnswersModel, QuestionField, QuestionModel } from '../questions/QuestionModel.js';
+import { isSelectPlaceholder } from '../parser/OptionParser.js';
 
 export class TestAnswerProvider implements IAnswerProvider {
   public async getAnswers(pageModel: PageModel, context: AnswerContext): Promise<PageAnswersModel> {
@@ -62,23 +63,23 @@ export class TestAnswerProvider implements IAnswerProvider {
     switch (field.type) {
       case 'select': {
         if (!field.options || field.options.length === 0) return '1';
-        // Pick first non-empty option
-        const validOptions = field.options.filter(
-          o => o.value !== '' && !o.text.toLowerCase().includes('select')
-        );
-        if (validOptions.length > 0) {
-          // Select middle or positive option
-          const chosen = validOptions[0];
+        // Filter out placeholders
+        const validOptions = field.options.filter(o => !isSelectPlaceholder(o));
+        const listToUse = validOptions.length > 0 ? validOptions : field.options.filter(o => o.value !== '');
+        if (listToUse.length > 0) {
+          const attempt = context.attemptIndex || 0;
+          const chosen = listToUse[attempt % listToUse.length];
           return chosen.value;
         }
-        return field.options[0]?.value ?? '1';
+        return field.options[0]?.value || '1';
       }
 
       case 'radio': {
         if (!field.options || field.options.length === 0) return '1';
-        // If question or field has error (e.g. revision), pick first option
-        const validOptions = field.options.filter(o => o.value !== '');
-        return validOptions[0]?.value ?? '1';
+        const validOptions = field.options.filter(o => o.value !== '' && !isSelectPlaceholder(o));
+        const listToUse = validOptions.length > 0 ? validOptions : field.options;
+        const attempt = context.attemptIndex || 0;
+        return listToUse[attempt % listToUse.length]?.value ?? '1';
       }
 
       case 'checkbox': {
