@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { Play, Pause, Square, Sliders, Globe, ArrowRight, Eye, Sparkles } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Play, Pause, Square, Sliders, Globe, ArrowRight, Eye, Sparkles, Zap } from 'lucide-react';
 import { SessionStatus, SimulationConfig } from '../types';
+import { PLATFORMS, detectPlatform, Platform } from '../utils/platformDetector';
 
 interface UrlInputBarProps {
   url: string;
@@ -17,33 +18,52 @@ interface UrlInputBarProps {
   showSettings: boolean;
 }
 
-const SAMPLE_SURVEYS = [
-  {
-    name: 'Confirmit Live: Test Survey (Live US Confirmit)',
-    url: 'https://survey.us.confirmit.com/wix/p114031942854.aspx?mode=test',
-    desc: 'Live Confirmit survey with Hidden in Live testing mode, Info screens, and dynamic state selection.'
+// Static Tailwind class map — dynamic class names are purged at build time
+const PLATFORM_STYLES: Record<string, {
+  active: string;
+  inactive: string;
+  badge: string;
+}> = {
+  confirmit: {
+    active: 'bg-blue-950/60 border-blue-500 text-blue-300 shadow-[0_0_8px_rgba(59,130,246,0.25)]',
+    inactive: 'bg-[#030712] border-[#1E293B] text-slate-400 hover:text-blue-300 hover:border-blue-800/70',
+    badge: 'bg-blue-950/70 border-blue-500/70 text-blue-300',
   },
-  {
-    name: 'Confirmit Flow: Hidden & Info Simulation (4 Steps)',
-    url: '/api/mock-surveys/confirmit-simulation',
-    desc: 'Simulates Confirmit testing bypass, error detection & recovery, and informational screens.'
+  decipher: {
+    active: 'bg-orange-950/60 border-orange-500 text-orange-300 shadow-[0_0_8px_rgba(249,115,22,0.25)]',
+    inactive: 'bg-[#030712] border-[#1E293B] text-slate-400 hover:text-orange-300 hover:border-orange-800/70',
+    badge: 'bg-orange-950/70 border-orange-500/70 text-orange-300',
   },
-  {
-    name: 'Demo 1: Developer Tools & AI Productivity (3 Pages)',
-    url: '/api/mock-surveys/developer-tools',
-    desc: 'Multi-step survey with radio scales, checkboxes, selects, and textareas.'
+  qualtrics: {
+    active: 'bg-sky-950/60 border-sky-500 text-sky-300 shadow-[0_0_8px_rgba(14,165,233,0.25)]',
+    inactive: 'bg-[#030712] border-[#1E293B] text-slate-400 hover:text-sky-300 hover:border-sky-800/70',
+    badge: 'bg-sky-950/70 border-sky-500/70 text-sky-300',
   },
-  {
-    name: 'Demo 2: Customer Experience & Quality (2 Pages)',
-    url: '/api/mock-surveys/customer-feedback',
-    desc: 'NPS rating, multiple-choice questions, and open-ended feedback.'
+  unicom: {
+    active: 'bg-violet-950/60 border-violet-500 text-violet-300 shadow-[0_0_8px_rgba(139,92,246,0.25)]',
+    inactive: 'bg-[#030712] border-[#1E293B] text-slate-400 hover:text-violet-300 hover:border-violet-800/70',
+    badge: 'bg-violet-950/70 border-violet-500/70 text-violet-300',
   },
-  {
-    name: 'Redirect Demo: Healthcare Survey (Redirects to Partner Survey)',
-    url: '/api/mock-surveys/partner-redirect',
-    desc: 'Demonstrates automated redirection detection, saving previous results & last screen snapshot in a separate window.'
-  }
-];
+  cmix: {
+    active: 'bg-rose-950/60 border-rose-500 text-rose-300 shadow-[0_0_8px_rgba(244,63,94,0.25)]',
+    inactive: 'bg-[#030712] border-[#1E293B] text-slate-400 hover:text-rose-300 hover:border-rose-800/70',
+    badge: 'bg-rose-950/70 border-rose-500/70 text-rose-300',
+  },
+  'google-sheets': {
+    active: 'bg-emerald-950/60 border-emerald-500 text-emerald-300 shadow-[0_0_8px_rgba(16,185,129,0.25)]',
+    inactive: 'bg-[#030712] border-[#1E293B] text-slate-400 hover:text-emerald-300 hover:border-emerald-800/70',
+    badge: 'bg-emerald-950/70 border-emerald-500/70 text-emerald-300',
+  },
+  others: {
+    active: 'bg-slate-800/60 border-slate-500 text-slate-200 shadow-[0_0_8px_rgba(100,116,139,0.2)]',
+    inactive: 'bg-[#030712] border-[#1E293B] text-slate-400 hover:text-slate-200 hover:border-slate-600',
+    badge: 'bg-slate-800/70 border-slate-500/70 text-slate-300',
+  },
+};
+
+function getStyles(id: string) {
+  return PLATFORM_STYLES[id] ?? PLATFORM_STYLES.others;
+}
 
 export const UrlInputBar: React.FC<UrlInputBarProps> = ({
   url,
@@ -59,16 +79,25 @@ export const UrlInputBar: React.FC<UrlInputBarProps> = ({
   toggleSettings,
   showSettings,
 }) => {
-  const [selectedSample, setSelectedSample] = useState<string>('');
+  const [activePlatformId, setActivePlatformId] = useState<string>('');
+  const [detectedPlatform, setDetectedPlatform] = useState<Platform | null>(null);
+
+  // Auto-detect platform whenever the URL changes
+  useEffect(() => {
+    if (!url.trim()) {
+      setDetectedPlatform(null);
+      return;
+    }
+    const p = detectPlatform(url);
+    setDetectedPlatform(p);
+  }, [url]);
 
   const isRunning = ['fetching', 'parsing', 'answering', 'delaying', 'submitting', 'advancing'].includes(status);
   const isPaused = status === 'paused';
 
-  const handleSelectSample = (sampleUrl: string) => {
-    setSelectedSample(sampleUrl);
-    if (sampleUrl) {
-      setUrl(sampleUrl);
-    }
+  const handleSelectPlatform = (platform: Platform) => {
+    setActivePlatformId(platform.id);
+    setUrl(platform.demoUrl);
   };
 
   const handlePaste = async () => {
@@ -76,37 +105,50 @@ export const UrlInputBar: React.FC<UrlInputBarProps> = ({
       const text = await navigator.clipboard.readText();
       if (text) {
         setUrl(text.trim());
-        setSelectedSample('');
+        setActivePlatformId('');
       }
     } catch {
-      // clipboard permission denied or not supported in iframe
+      // clipboard permission denied or not supported
     }
   };
+
+  const handleUrlChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setUrl(e.target.value);
+    setActivePlatformId('');
+  };
+
+  // If the current URL matches a platform's demoUrl exactly, highlight that button
+  const activeButtonId = activePlatformId ||
+    (PLATFORMS.find(p => p.demoUrl === url)?.id ?? '');
 
   return (
     <div className="bg-[#111827] rounded-xl border border-[#1E293B] shadow-2xl p-4 sm:p-5">
       <div className="flex flex-col gap-3">
-        {/* Sample preset selector */}
+
+        {/* Platform preset buttons row */}
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-[0.2em]">
-              Target Presets:
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-[0.2em] whitespace-nowrap">
+              Platform:
             </span>
             <div className="flex flex-wrap gap-1.5">
-              {SAMPLE_SURVEYS.map((s, idx) => (
-                <button
-                  key={s.url}
-                  onClick={() => handleSelectSample(s.url)}
-                  disabled={isRunning}
-                  className={`text-xs px-2.5 py-1 rounded-md font-mono transition-all ${
-                    url === s.url
-                      ? 'bg-emerald-950/60 border border-emerald-500 text-emerald-300 shadow-[0_0_8px_rgba(16,185,129,0.2)]'
-                      : 'bg-[#030712] border border-[#1E293B] text-slate-400 hover:text-slate-200 hover:border-[#334155]'
-                  } disabled:opacity-50`}
-                >
-                  Demo {idx + 1}: {s.name.split(':')[1]?.split('(')[0]?.trim()}
-                </button>
-              ))}
+              {PLATFORMS.map((platform) => {
+                const isActive = activeButtonId === platform.id;
+                const styles = getStyles(platform.id);
+                return (
+                  <button
+                    key={platform.id}
+                    onClick={() => handleSelectPlatform(platform)}
+                    disabled={isRunning}
+                    title={platform.description}
+                    className={`text-xs px-2.5 py-1 rounded-md font-mono border transition-all disabled:opacity-50 ${
+                      isActive ? styles.active : styles.inactive
+                    }`}
+                  >
+                    {platform.shortName}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -124,20 +166,17 @@ export const UrlInputBar: React.FC<UrlInputBarProps> = ({
           </button>
         </div>
 
-        {/* Input Bar and Action Buttons */}
+        {/* URL input + action buttons */}
         <div className="flex flex-col sm:flex-row items-stretch gap-2.5">
           <div className="relative flex-1">
-            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
+            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
               <Globe className="w-4 h-4 text-emerald-500/80" />
             </div>
             <input
               type="text"
               value={url}
-              onChange={(e) => {
-                setUrl(e.target.value);
-                setSelectedSample('');
-              }}
-              placeholder="Paste any survey URL (e.g. https://... or select Demo 1 above)..."
+              onChange={handleUrlChange}
+              placeholder="Paste any survey URL or select a platform above..."
               disabled={isRunning}
               className="w-full pl-10 pr-16 py-2.5 bg-[#030712] border border-[#334155] rounded-lg text-sm font-mono text-emerald-100 placeholder:text-slate-600 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-all disabled:opacity-60"
             />
@@ -151,7 +190,7 @@ export const UrlInputBar: React.FC<UrlInputBarProps> = ({
             </button>
           </div>
 
-          {/* Primary Action Buttons */}
+          {/* Action Buttons */}
           <div className="flex items-center gap-2">
             {!isRunning && !isPaused ? (
               <>
@@ -206,6 +245,15 @@ export const UrlInputBar: React.FC<UrlInputBarProps> = ({
             )}
           </div>
         </div>
+
+        {/* Auto-detected platform badge */}
+        {detectedPlatform && url.trim() && !url.includes('/api/mock-surveys/') && (
+          <div className={`flex items-center gap-2 text-[11px] font-mono px-3 py-1.5 rounded-lg border w-fit ${getStyles(detectedPlatform.id).badge}`}>
+            <Zap className="w-3 h-3 flex-shrink-0" />
+            <span className="font-bold uppercase tracking-wider">{detectedPlatform.name}</span>
+            <span className="text-slate-400">detected — {detectedPlatform.description}</span>
+          </div>
+        )}
       </div>
     </div>
   );

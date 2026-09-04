@@ -90,7 +90,8 @@ export class AnswerValidator {
 
   private static getSafeRepairValue(field: QuestionField): any {
     if (field.options && field.options.length > 0) {
-      const nonEmpties = field.options.filter(o => o.value !== '');
+      // Skip empty-string and "0" placeholder options (common Confirmit select placeholders)
+      const nonEmpties = field.options.filter(o => o.value !== '' && o.value !== '0');
       const opt = nonEmpties.length > 0 ? nonEmpties[0] : field.options[0];
       return field.type === 'checkbox' ? [opt.value] : opt.value;
     }

@@ -23,7 +23,10 @@ import {
   RedirectedSurveyArchive,
 } from '../../src/types.js';
 import { SurveyClient } from './client/SurveyClient.js';
+import { BrowserClient } from './client/BrowserClient.js';
 import { PageParser } from './parser/PageParser.js';
+import { BrowserSurveySubmitter } from './submission/BrowserSurveySubmitter.js';
+import { detectPlatform, PlatformConfig } from './platforms/index.js';
 import { PageModel, PageAnswersModel } from './questions/QuestionModel.js';
 import { IAnswerProvider } from './answers/AnswerProvider.js';
 import { TestAnswerProvider } from './answers/TestAnswerProvider.js';
@@ -37,6 +40,9 @@ type Listener = (session: SurveySession) => void;
 interface SessionContext {
   session: SurveySession;
   client: SurveyClient;
+  browserClient?: BrowserClient;
+  useBrowser: boolean;
+  platform: PlatformConfig;
   abortController: AbortController;
   pausePromise: Promise<void> | null;
   pauseResolver: (() => void) | null;
@@ -108,6 +114,27 @@ export class SurveyEngine {
       normalizedUrl = `${baseHost}${normalizedUrl}`;
     }
 
+    // Detect the survey platform so platform-specific strategies can be applied.
+    const platform = detectPlatform(normalizedUrl);
+
+    // Use headless browser for real external surveys so their JS executes
+    // (VSL tokens, cfApi, jQuery logic) before we read or submit the page.
+    const useBrowser =
+      platform.useBrowser &&
+      !normalizedUrl.includes('localhost') &&
+      !normalizedUrl.includes('/api/mock-surveys/');
+
+    let browserClient: BrowserClient | undefined;
+    if (useBrowser) {
+      browserClient = new BrowserClient();
+      try {
+        await browserClient.launch();
+      } catch (err) {
+        console.warn('[SurveyEngine] Puppeteer launch failed, falling back to fetch:', err);
+        browserClient = undefined;
+      }
+    }
+
     // Determine answer provider
     const mode = config.engineMode || 'hybrid';
     const answerProvider: IAnswerProvider =
@@ -134,6 +161,9 @@ export class SurveyEngine {
     const ctx: SessionContext = {
       session,
       client,
+      browserClient,
+      useBrowser: useBrowser && !!browserClient,
+      platform,
       abortController,
       pausePromise: null,
       pauseResolver: null,
@@ -142,7 +172,7 @@ export class SurveyEngine {
     };
 
     this.sessions.set(sessionId, ctx);
-    this.addLog(ctx, 'info', `Survey Automation Engine initialized for target: ${normalizedUrl}`);
+    this.addLog(ctx, 'info', `Survey Automation Engine initialized — Platform: ${platform.name} — Target: ${normalizedUrl}`);
 
     // Launch survey loop asynchronously
     this.executeSurveyLoop(sessionId).catch(err => {
@@ -156,6 +186,7 @@ export class SurveyEngine {
         ctx.session.errorMessage = err.message || 'Survey execution failure.';
         this.addLog(ctx, 'error', `Execution failed: ${ctx.session.errorMessage}`);
       }
+      ctx.browserClient?.close();
       this.notify(sessionId);
     });
 
@@ -204,6 +235,7 @@ export class SurveyEngine {
       resolve();
     }
 
+    ctx.browserClient?.close();
     ctx.session.status = 'error';
     ctx.session.errorMessage = 'Automation halted by user.';
     ctx.session.activeDelay = undefined;
@@ -235,16 +267,25 @@ export class SurveyEngine {
     let retryCount = 0;
     const MAX_RETRIES = 3;
 
-    // STEP 1: Initial GET request
+    // STEP 1: Initial page load (browser-rendered or plain fetch)
     session.status = 'fetching';
     this.addLog(ctx, 'action', `Connecting to survey entry URL: ${currentPageUrl}`);
     ctx.currentScreenStartTime = Date.now();
 
-    const initialResponse = await client.get(currentPageUrl, {
-      signal: abortController.signal,
-    });
+    let initHtml: string;
+    let initUrl: string;
+    if (ctx.useBrowser && ctx.browserClient) {
+      this.addLog(ctx, 'info', 'Using headless browser — executing survey JavaScript (VSL tokens, cfApi)...');
+      const br = await ctx.browserClient.navigate(currentPageUrl);
+      initHtml = br.html;
+      initUrl = br.url;
+    } else {
+      const res = await client.get(currentPageUrl, { signal: abortController.signal });
+      initHtml = res.html;
+      initUrl = res.url;
+    }
 
-    let currentPageModel: PageModel = PageParser.parse(initialResponse.html, initialResponse.url);
+    let currentPageModel: PageModel = PageParser.parse(initHtml, initUrl);
 
     while (!session.completedAt) {
       if (!(await this.checkPauseOrAbort(ctx))) return;
@@ -339,11 +380,11 @@ export class SurveyEngine {
 
       const screenDurationMs = Date.now() - ctx.currentScreenStartTime;
 
-      const submitResult = await submitter.submit(
-        currentPageModel,
-        pageAnswers,
-        abortController.signal
-      );
+      const submitResult = ctx.useBrowser && ctx.browserClient
+        ? await new BrowserSurveySubmitter(ctx.browserClient, ctx.platform).submit(
+            currentPageModel, pageAnswers, abortController.signal
+          )
+        : await submitter.submit(currentPageModel, pageAnswers, abortController.signal);
 
       // Check if screen content genuinely transitioned to a new page or completed
       const screenChanged = this.hasScreenContentChanged(currentPageModel, submitResult.nextPage);
@@ -572,6 +613,8 @@ export class SurveyEngine {
     session.completedAt = Date.now();
     session.confirmationMessage = message || 'Survey testing successfully completed.';
     session.activeDelay = undefined;
+
+    ctx.browserClient?.close();
 
     // MANDATORY REQUIREMENT: Display "Test complete" at console info
     console.info('[INFO] Test complete - Automated survey run completed successfully.');

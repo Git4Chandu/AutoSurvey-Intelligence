@@ -42,7 +42,7 @@ const DEFAULT_CONFIG: SimulationConfig = {
 };
 
 export default function App() {
-  const [url, setUrl] = useState<string>('/api/mock-surveys/developer-tools');
+  const [url, setUrl] = useState<string>('/api/mock-surveys/confirmit-simulation');
   const [config, setConfig] = useState<SimulationConfig>(DEFAULT_CONFIG);
   const [session, setSession] = useState<SurveySession | null>(null);
   const [showSettings, setShowSettings] = useState<boolean>(false);
