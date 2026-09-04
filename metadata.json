@@ -1,0 +1,6 @@
+{
+  "name": "AutoSurvey Intelligence",
+  "description": "Node.js automated survey assistant that uses human intelligence with Gemini to parse, answer, simulate human delay intervals, auto-advance, and complete online surveys.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
