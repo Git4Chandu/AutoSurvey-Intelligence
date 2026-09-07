@@ -15,6 +15,7 @@ import { LiveTerminalLogs } from './components/LiveTerminalLogs';
 import { CompletionReportModal } from './components/CompletionReportModal';
 import { LiveScreenWindow } from './components/LiveScreenWindow';
 import { RedirectedSurveyModal } from './components/RedirectedSurveyModal';
+import { SessionHistoryPanel } from './components/SessionHistoryPanel';
 import {
   FileText,
   Terminal,
@@ -39,11 +40,17 @@ const DEFAULT_CONFIG: SimulationConfig = {
   simulateKeystrokes: true,
   autoAdvance: true,
   requireConfirmBeforeSubmit: false,
+  surveyReferenceText: '',
 };
+
+const SURVEY_REFERENCE_STORAGE = 'autosurvey.surveyReferenceText';
 
 export default function App() {
   const [url, setUrl] = useState<string>('/api/mock-surveys/confirmit-simulation');
-  const [config, setConfig] = useState<SimulationConfig>(DEFAULT_CONFIG);
+  const [config, setConfig] = useState<SimulationConfig>(() => ({
+    ...DEFAULT_CONFIG,
+    surveyReferenceText: window.localStorage.getItem(SURVEY_REFERENCE_STORAGE) || '',
+  }));
   const [session, setSession] = useState<SurveySession | null>(null);
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [showCompletionModal, setShowCompletionModal] = useState<boolean>(false);
@@ -52,6 +59,7 @@ export default function App() {
   const [activeRedirectModalArchive, setActiveRedirectModalArchive] = useState<RedirectedSurveyArchive | null>(null);
   const [isInspecting, setIsInspecting] = useState<boolean>(false);
   const [inspectedPage, setInspectedPage] = useState<SurveyPage | null>(null);
+  const [startError, setStartError] = useState<string | null>(null);
 
   const eventSourceRef = useRef<EventSource | null>(null);
 
@@ -69,6 +77,15 @@ export default function App() {
     handleInspect(url);
   }, []);
 
+  useEffect(() => {
+    const referenceText = config.surveyReferenceText || '';
+    if (referenceText) {
+      window.localStorage.setItem(SURVEY_REFERENCE_STORAGE, referenceText);
+    } else {
+      window.localStorage.removeItem(SURVEY_REFERENCE_STORAGE);
+    }
+  }, [config.surveyReferenceText]);
+
   // Listen for session completion to pop up completion modal
   useEffect(() => {
     if (session?.status === 'completed') {
@@ -83,6 +100,14 @@ export default function App() {
     }
   }, [session?.latestRedirectedArchive?.archiveId]);
 
+  useEffect(() => {
+    const modalOpen = showCompletionModal || Boolean(activeRedirectModalArchive);
+    document.body.style.overflow = modalOpen ? 'hidden' : '';
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [showCompletionModal, activeRedirectModalArchive]);
+
   const connectToStream = (sessionId: string) => {
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
@@ -95,7 +120,7 @@ export default function App() {
       try {
         const updatedSession: SurveySession = JSON.parse(event.data);
         setSession(updatedSession);
-        if (updatedSession.status === 'completed' || updatedSession.status === 'error') {
+        if (updatedSession.status === 'completed' || updatedSession.status === 'error' || updatedSession.status === 'aborted') {
           sse.close();
         }
       } catch (err) {
@@ -111,6 +136,7 @@ export default function App() {
   const handleStart = async () => {
     if (!url.trim()) return;
     setInspectedPage(null);
+    setStartError(null);
 
     try {
       const res = await fetch('/api/survey/start', {
@@ -120,12 +146,18 @@ export default function App() {
       });
 
       const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || `Unable to start survey automation (HTTP ${res.status}).`);
+      }
       if (data.session) {
         setSession(data.session);
         connectToStream(data.sessionId);
+      } else {
+        throw new Error('The server did not return a survey session.');
       }
     } catch (err) {
       console.error('Error starting survey run:', err);
+      setStartError(err instanceof Error ? err.message : 'Unable to start survey automation.');
     }
   };
 
@@ -151,7 +183,7 @@ export default function App() {
 
   const handleStop = async () => {
     if (!session) return;
-    setSession(prev => prev ? { ...prev, status: 'error', errorMessage: 'Execution halted by user.' } : null);
+    setSession(prev => prev ? { ...prev, status: 'aborted', errorMessage: 'Automation aborted by user. This session cannot be resumed.' } : null);
     try {
       await fetch(`/api/survey/stop/${session.sessionId}`, { method: 'POST' });
     } catch (err) {
@@ -200,11 +232,22 @@ export default function App() {
     }
   };
 
+  const handleLoadSession = (storedSession: SurveySession) => {
+    setSession(storedSession);
+    setUrl(storedSession.surveyUrl);
+    setInspectedPage(null);
+    setSelectedScreenPageIndex(undefined);
+    setShowCompletionModal(false);
+    if (['fetching', 'parsing', 'answering', 'delaying', 'submitting', 'advancing', 'paused'].includes(storedSession.status)) {
+      connectToStream(storedSession.sessionId);
+    }
+  };
+
   const currentStatus: SessionStatus = session?.status || 'idle';
   const displayPageData = session?.currentPageData || inspectedPage;
 
   return (
-    <div className="h-screen overflow-hidden bg-[#0A0A0B] text-slate-100 font-sans flex flex-col selection:bg-emerald-900 selection:text-emerald-100">
+    <div className="min-h-screen overflow-x-hidden overflow-y-auto bg-[#0A0A0B] text-slate-100 font-sans flex flex-col selection:bg-emerald-900 selection:text-emerald-100">
       {/* Header bar */}
       <Header
         status={currentStatus}
@@ -214,7 +257,7 @@ export default function App() {
         totalEstimatedPages={session?.totalEstimatedPages || 1}
       />
 
-      <main className="flex-1 min-h-0 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-col gap-5">
+      <main className="flex-1 min-h-0 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 flex flex-col gap-5">
         {/* Survey URL Input & Controls */}
         <UrlInputBar
           url={url}
@@ -230,6 +273,11 @@ export default function App() {
           toggleSettings={() => setShowSettings(!showSettings)}
           showSettings={showSettings}
         />
+        {startError && (
+          <div className="rounded-lg border border-red-900/70 bg-red-950/30 px-3 py-2 text-xs text-red-200">
+            Automation could not start: {startError}
+          </div>
+        )}
 
         {/* Behavior and Delay Settings drawer */}
         {showSettings && (
@@ -518,6 +566,11 @@ export default function App() {
             <LiveTerminalLogs logs={session?.logs || []} onClear={handleClearLogs} />
           )}
         </div>
+
+        <SessionHistoryPanel
+          activeSessionId={session?.sessionId}
+          onLoad={handleLoadSession}
+        />
       </main>
 
       {/* Redirected Survey Results Window / Modal */}

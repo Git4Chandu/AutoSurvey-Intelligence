@@ -117,8 +117,9 @@ export const UrlInputBar: React.FC<UrlInputBarProps> = ({
     setActivePlatformId('');
   };
 
-  // If the current URL matches a platform's demoUrl exactly, highlight that button
-  const activeButtonId = activePlatformId ||
+  // Prefer the user's selected preset, but otherwise highlight the platform
+  // detected from the current URL so custom survey links still show the match.
+  const activeButtonId = activePlatformId || detectedPlatform?.id ||
     (PLATFORMS.find(p => p.demoUrl === url)?.id ?? '');
 
   return (

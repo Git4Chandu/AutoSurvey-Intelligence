@@ -77,8 +77,8 @@ export const CompletionReportModal: React.FC<CompletionReportModalProps> = ({ se
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#0A0A0B]/85 backdrop-blur-sm">
-      <div className="bg-[#111827] rounded-xl border border-[#1E293B] shadow-2xl max-w-3xl w-full max-h-[92vh] flex flex-col overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#0A0A0B]/85 backdrop-blur-sm overscroll-contain">
+      <div className="bg-[#111827] rounded-xl border border-[#1E293B] shadow-2xl max-w-3xl w-full max-h-[92vh] flex flex-col overflow-hidden overscroll-contain">
         {/* Header */}
         <div className="p-6 bg-[#0F172A] border-b border-[#1E293B] flex items-start justify-between">
           <div className="flex items-center gap-3">
@@ -178,7 +178,7 @@ export const CompletionReportModal: React.FC<CompletionReportModalProps> = ({ se
         </div>
 
         {/* Content Body */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-[#111827]">
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-6 space-y-4 bg-[#111827]">
           {activeTab === 'screens' ? (
             <div className="space-y-3">
               <div className="flex items-center justify-between text-xs text-slate-400 font-mono mb-2">
@@ -322,4 +322,3 @@ export const CompletionReportModal: React.FC<CompletionReportModalProps> = ({ se
     </div>
   );
 };
-

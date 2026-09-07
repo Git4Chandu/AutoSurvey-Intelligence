@@ -98,6 +98,7 @@ export type EngineMode = 'hybrid' | 'deterministic' | 'ai';
 export interface SimulationConfig {
   persona: PersonaType;
   customPersonaPrompt?: string;
+  surveyReferenceText?: string;
   delayProfile: DelayProfile;
   engineMode?: EngineMode;
   minDelaySec: number;
@@ -122,6 +123,7 @@ export type SessionStatus =
   | 'advancing'
   | 'completed'
   | 'paused'
+  | 'aborted'
   | 'error';
 
 export interface LogEntry {

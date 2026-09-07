@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { SimulationConfig, PersonaType, DelayProfile } from '../types';
-import { User, Clock, Zap, BookOpen, Keyboard, ShieldCheck } from 'lucide-react';
+import { User, Clock, Zap, BookOpen, Keyboard, ShieldCheck, KeyRound } from 'lucide-react';
+import mammoth from 'mammoth';
 
 interface SimulationSettingsProps {
   config: SimulationConfig;
@@ -48,11 +49,107 @@ const DELAY_PRESETS: Array<{ id: DelayProfile; label: string; min: number; max: 
   { id: 'custom', label: 'Custom Delays', min: 1.0, max: 5.0, note: 'Manually adjust delay boundaries' }
 ];
 
+const GEMINI_API_KEY_STORAGE = 'autosurvey.geminiApiKey';
+
 export const SimulationSettings: React.FC<SimulationSettingsProps> = ({
   config,
   onChange,
   disabled = false,
 }) => {
+  const [apiKey, setApiKey] = useState('');
+  const [aiConfigured, setAiConfigured] = useState(false);
+  const [aiMessage, setAiMessage] = useState('');
+
+  useEffect(() => {
+    const restoreAiConnection = async () => {
+      const savedKey = window.localStorage.getItem(GEMINI_API_KEY_STORAGE);
+      if (savedKey) {
+        try {
+          const response = await fetch('/api/ai/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ apiKey: savedKey }),
+          });
+          if (response.ok) {
+            setAiConfigured(true);
+            setAiMessage('Saved Gemini connection restored.');
+            return;
+          }
+        } catch {
+          // The status request below provides the correct disconnected state.
+        }
+      }
+
+      try {
+        const response = await fetch('/api/ai/status');
+        if (!response.ok) throw new Error('Unable to read AI connection status.');
+        const data = await response.json();
+        setAiConfigured(Boolean(data.configured));
+      } catch {
+        setAiConfigured(false);
+      }
+    };
+
+    void restoreAiConnection();
+  }, []);
+
+  const handleAiKeySave = async () => {
+    setAiMessage('');
+    if (!apiKey.trim()) {
+      setAiMessage('Enter a Gemini API key first.');
+      return;
+    }
+    try {
+      const response = await fetch('/api/ai/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: apiKey.trim() }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Could not configure Gemini.');
+      window.localStorage.setItem(GEMINI_API_KEY_STORAGE, apiKey.trim());
+      setApiKey('');
+      setAiConfigured(true);
+      setAiMessage('Connected. New runs can use Gemini reasoning.');
+    } catch (error) {
+      setAiMessage(error instanceof Error ? error.message : 'Could not configure Gemini.');
+    }
+  };
+
+  const handleForgetAiKey = async () => {
+    window.localStorage.removeItem(GEMINI_API_KEY_STORAGE);
+    try {
+      const response = await fetch('/api/ai/config', { method: 'DELETE' });
+      if (!response.ok) throw new Error('Could not disconnect Gemini.');
+      setAiConfigured(false);
+      setAiMessage('Saved Gemini connection removed.');
+    } catch (error) {
+      setAiMessage(error instanceof Error ? error.message : 'Could not disconnect Gemini.');
+    }
+  };
+
+  const handleReferenceUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    try {
+      let text = '';
+      if (file.name.toLowerCase().endsWith('.docx')) {
+        const buffer = await file.arrayBuffer();
+        const result = await mammoth.extractRawText({ arrayBuffer: buffer });
+        text = result.value;
+      } else {
+        text = await file.text();
+      }
+      const normalized = text.trim();
+      if (!normalized) throw new Error('The selected file did not contain readable text.');
+      onChange({ ...config, surveyReferenceText: normalized.slice(0, 20000) });
+    } catch (error) {
+      setAiMessage(error instanceof Error ? error.message : 'Could not read the questionnaire file.');
+    }
+  };
+
   const handlePersonaChange = (persona: PersonaType) => {
     onChange({ ...config, persona });
   };
@@ -83,6 +180,84 @@ export const SimulationSettings: React.FC<SimulationSettingsProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Left column: Human Persona */}
         <div>
+          <div className="mb-4 rounded-lg border border-emerald-900/60 bg-emerald-950/20 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">
+                <KeyRound className="w-3.5 h-3.5 text-emerald-400" />
+                Gemini AI connection
+              </label>
+              <span className={`text-[10px] font-mono uppercase ${aiConfigured ? 'text-emerald-300' : 'text-amber-300'}`}>
+                {aiConfigured ? 'connected' : 'not configured'}
+              </span>
+            </div>
+            <div className="mt-2 flex flex-col sm:flex-row gap-2">
+              <input
+                type="password"
+                value={apiKey}
+                onChange={event => setApiKey(event.target.value)}
+                disabled={disabled}
+                placeholder="Paste Gemini API key (kept server-side)"
+                autoComplete="off"
+                className="min-w-0 flex-1 rounded-md border border-[#334155] bg-[#030712] px-2.5 py-2 text-xs font-mono text-emerald-100 placeholder:text-slate-600 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
+              />
+              <button
+                type="button"
+                onClick={handleAiKeySave}
+                disabled={disabled || !apiKey.trim()}
+                className="rounded-md border border-emerald-700 bg-emerald-950/60 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-emerald-300 hover:bg-emerald-900/70 disabled:opacity-40"
+              >
+                Connect
+              </button>
+              {aiConfigured && (
+                <button
+                  type="button"
+                  onClick={() => void handleForgetAiKey()}
+                  disabled={disabled}
+                  className="rounded-md border border-slate-700 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400 hover:text-slate-200 disabled:opacity-40"
+                >
+                  Forget
+                </button>
+              )}
+            </div>
+            <p className="mt-1.5 text-[10px] text-slate-500">
+              The key is held in server memory and is never placed in survey session logs or browser payloads.
+            </p>
+            {aiMessage && <p className="mt-1 text-[10px] text-emerald-300">{aiMessage}</p>}
+          </div>
+
+          <div className="mb-4 rounded-lg border border-blue-900/60 bg-blue-950/20 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">
+                <BookOpen className="w-3.5 h-3.5 text-blue-400" />
+                Survey questionnaire reference
+              </label>
+              <span className="text-[10px] font-mono uppercase text-blue-300">
+                {config.surveyReferenceText ? 'loaded' : 'optional'}
+              </span>
+            </div>
+            <p className="mt-1.5 text-[10px] text-slate-500">
+              Upload a .docx, .txt, .md, or .json questionnaire, or enter authorized respondent instructions below. Gemini uses this as decision context.
+            </p>
+            <input
+              type="file"
+              accept=".docx,.txt,.md,.json,text/plain,application/json,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              onChange={handleReferenceUpload}
+              disabled={disabled}
+              className="mt-2 block w-full text-[11px] text-slate-400 file:mr-3 file:rounded-md file:border file:border-blue-800 file:bg-blue-950/60 file:px-2.5 file:py-1.5 file:text-[10px] file:font-bold file:uppercase file:text-blue-300 hover:file:bg-blue-900/70 disabled:opacity-50"
+            />
+            <textarea
+              value={config.surveyReferenceText || ''}
+              onChange={event => onChange({ ...config, surveyReferenceText: event.target.value.slice(0, 20000) })}
+              disabled={disabled}
+              rows={3}
+              placeholder="Authorized instructions, eligibility facts, product usage context, or questionnaire notes..."
+              className="mt-2 w-full rounded-md border border-[#334155] bg-[#030712] px-2.5 py-2 text-xs text-blue-100 placeholder:text-slate-600 focus:outline-none focus:border-blue-500 disabled:opacity-50"
+            />
+            <p className="mt-1 text-[10px] text-amber-300/80">
+              Reference material guides truthful test responses; it must not be used to fabricate eligibility or bypass a live screener.
+            </p>
+          </div>
+
           <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-[0.2em] mb-2">
             1. Respondent Persona Archetype
           </label>

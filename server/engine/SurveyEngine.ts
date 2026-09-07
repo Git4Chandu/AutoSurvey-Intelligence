@@ -34,6 +34,7 @@ import { GeminiAnswerProvider } from './answers/GeminiAnswerProvider.js';
 import { AnswerValidator } from './validation/AnswerValidator.js';
 import { SurveySubmitter } from './submission/SurveySubmitter.js';
 import { Logger } from './logging/Logger.js';
+import { SessionStore } from '../storage/SessionStore.js';
 
 type Listener = (session: SurveySession) => void;
 
@@ -53,6 +54,7 @@ interface SessionContext {
 export class SurveyEngine {
   private sessions = new Map<string, SessionContext>();
   private listeners = new Map<string, Set<Listener>>();
+  private readonly sessionStore = new SessionStore();
 
   public getSession(sessionId: string): SurveySession | undefined {
     return this.sessions.get(sessionId)?.session;
@@ -77,6 +79,7 @@ export class SurveyEngine {
   private notify(sessionId: string) {
     const ctx = this.sessions.get(sessionId);
     if (!ctx) return;
+    this.sessionStore.save(ctx.session);
     const sessionListeners = this.listeners.get(sessionId);
     if (sessionListeners) {
       for (const cb of sessionListeners) {
@@ -172,25 +175,35 @@ export class SurveyEngine {
     };
 
     this.sessions.set(sessionId, ctx);
+    this.sessionStore.save(session);
     this.addLog(ctx, 'info', `Survey Automation Engine initialized — Platform: ${platform.name} — Target: ${normalizedUrl}`);
 
     // Launch survey loop asynchronously
     this.executeSurveyLoop(sessionId).catch(err => {
-      if (ctx.abortController.signal.aborted) {
+      if (ctx.abortController.signal.aborted && ctx.session.status !== 'aborted') {
         ctx.session.status = 'error';
         ctx.session.errorMessage = 'Session stopped by user request.';
         this.addLog(ctx, 'warn', 'Automation session terminated.');
-      } else {
+      } else if (ctx.session.status !== 'aborted') {
         console.error(`[SurveyEngine] Session ${sessionId} error:`, err);
         ctx.session.status = 'error';
         ctx.session.errorMessage = err.message || 'Survey execution failure.';
         this.addLog(ctx, 'error', `Execution failed: ${ctx.session.errorMessage}`);
       }
+
       ctx.browserClient?.close();
       this.notify(sessionId);
     });
 
     return session;
+  }
+
+  public getStoredSession(sessionId: string): SurveySession | undefined {
+    return this.sessions.get(sessionId)?.session || this.sessionStore.get(sessionId);
+  }
+
+  public listStoredSessions(limit?: number) {
+    return this.sessionStore.list(limit);
   }
 
   public pauseSession(sessionId: string) {
@@ -207,7 +220,7 @@ export class SurveyEngine {
     this.notify(sessionId);
   }
 
-  public resumeSession(sessionId: string) {
+  public async resumeSession(sessionId: string) {
     const ctx = this.sessions.get(sessionId);
     if (!ctx) return;
 
@@ -226,6 +239,9 @@ export class SurveyEngine {
       ctx.session.status = 'answering';
       ctx.session.errorMessage = undefined;
       ctx.abortController = new AbortController();
+      if (ctx.useBrowser && ctx.browserClient && !ctx.browserClient.isLaunched()) {
+        await ctx.browserClient.launch();
+      }
       this.addLog(ctx, 'info', 'Resuming survey test execution from current stage...');
       this.notify(sessionId);
       this.executeSurveyLoop(sessionId).catch(err => {
@@ -239,7 +255,7 @@ export class SurveyEngine {
 
   public stopSession(sessionId: string) {
     const ctx = this.sessions.get(sessionId);
-    if (!ctx) return;
+    if (!ctx || ctx.session.status === 'completed' || ctx.session.status === 'aborted') return;
 
     ctx.abortController.abort();
     // If paused, resolve pause immediately to let loop exit cleanly
@@ -251,10 +267,10 @@ export class SurveyEngine {
     }
 
     ctx.browserClient?.close();
-    ctx.session.status = 'error';
-    ctx.session.errorMessage = 'Automation halted by user.';
+    ctx.session.status = 'aborted';
+    ctx.session.errorMessage = 'Automation aborted by user. This session cannot be resumed.';
     ctx.session.activeDelay = undefined;
-    this.addLog(ctx, 'warn', 'Automation sequence halted.');
+    this.addLog(ctx, 'warn', 'Automation sequence aborted completely. Browser and pending work were terminated.');
     this.notify(sessionId);
   }
 
@@ -294,6 +310,7 @@ export class SurveyEngine {
       const br = await ctx.browserClient.navigate(currentPageUrl);
       initHtml = br.html;
       initUrl = br.url;
+      this.addLog(ctx, 'info', 'Survey DOM stable — question analysis is now safe to begin.');
     } else {
       const res = await client.get(currentPageUrl, { signal: abortController.signal });
       initHtml = res.html;
@@ -336,6 +353,8 @@ export class SurveyEngine {
         pageAnswers = await ctx.answerProvider.getAnswers(currentPageModel, {
           persona: session.config.persona,
           customPersonaPrompt: session.config.customPersonaPrompt,
+          surveyReferenceText: session.config.surveyReferenceText,
+          runSeed: session.sessionId,
           pageIndex,
           surveyUrl: currentPageUrl,
           attemptIndex: retryCount,

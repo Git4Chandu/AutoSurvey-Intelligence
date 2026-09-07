@@ -43,6 +43,56 @@ export class BrowserClient {
   }
 
   /**
+   * Wait until the rendered survey has stopped changing before parsing or answering.
+   * Some platforms populate controls asynchronously after network idle.
+   */
+  async waitForStableDom(timeoutMs = 12000, quietMs = 700): Promise<void> {
+    const startedAt = Date.now();
+    let previousSignature = '';
+    let stableSince = 0;
+
+    while (Date.now() - startedAt < timeoutMs) {
+      let state: { readyState: string; signature: string };
+      try {
+        state = await this.pg.evaluate(() => ({
+          readyState: document.readyState,
+          signature: [
+            document.body?.innerHTML.length ?? 0,
+            document.querySelectorAll('form, input, select, textarea, button').length,
+            document.body?.innerText.length ?? 0,
+          ].join(':'),
+        }));
+      } catch (error) {
+        // A platform redirect can replace the execution context between polls.
+        // Wait for that navigation to settle, then resume stability checks.
+        if (!(error instanceof Error) || !error.message.toLowerCase().includes('execution context was destroyed')) {
+          throw error;
+        }
+        previousSignature = '';
+        stableSince = 0;
+        await new Promise(resolve => setTimeout(resolve, 250));
+        continue;
+      }
+
+      if (state.readyState === 'complete' && state.signature === previousSignature) {
+        if (!stableSince) stableSince = Date.now();
+        if (Date.now() - stableSince >= quietMs) return;
+      } else {
+        previousSignature = state.signature;
+        stableSince = 0;
+      }
+      await new Promise(resolve => setTimeout(resolve, 150));
+    }
+
+    // Some survey pages continuously update analytics nodes. A complete document
+    // with rendered controls is still safe to parse after the bounded wait.
+    const readyState = await this.pg.evaluate(() => document.readyState);
+    if (readyState !== 'complete') {
+      throw new Error('Survey DOM did not finish loading before the automation timeout.');
+    }
+  }
+
+  /**
    * Navigate to a URL, wait for JS to fully execute (including VSL token
    * generation), then return the fully-rendered HTML.
    */
@@ -56,11 +106,12 @@ export class BrowserClient {
       httpStatus = response?.status() ?? 200;
     } catch (err: any) {
       // networkidle2 timeout is acceptable — page content is still usable
-      if (!err?.message?.includes('timeout')) throw err;
+      if (!err?.message?.includes('timeout') && !err?.message?.includes('Execution context was destroyed')) throw err;
     }
 
     // Allow deferred JS (cfApi init, VSL token injection) to settle
     await new Promise(r => setTimeout(r, 1200));
+    await this.waitForStableDom();
 
     const html = await this.pg.content();
     const finalUrl = this.pg.url();
@@ -324,6 +375,7 @@ export class BrowserClient {
     }
 
     await new Promise(r => setTimeout(r, 800));
+    await this.waitForStableDom();
     const html = await this.pg.content();
     const finalUrl = this.pg.url();
     return { html, url: finalUrl, status: 200 };
