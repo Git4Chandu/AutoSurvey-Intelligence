@@ -1,14 +1,25 @@
 import { GoogleGenAI } from "@google/genai";
 import { SurveyQuestion, QuestionAnswer, SimulationConfig, PersonaType } from "../src/types.js";
 
-export const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    }
+let aiClient: GoogleGenAI | null = null;
+
+export function getAiClient(): GoogleGenAI | null {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return null;
   }
-});
+  if (!aiClient) {
+    aiClient = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        }
+      }
+    });
+  }
+  return aiClient;
+}
 
 const PERSONA_DESCRIPTIONS: Record<PersonaType, string> = {
   tech_pro: "Experienced software engineer and technology professional in their early 30s. Highly tech-savvy, values high performance, clean UI, privacy, developer tooling, and modern automated workflows.",
@@ -85,6 +96,11 @@ Return ONLY a valid JSON array of objects conforming to this schema:
 ]`;
 
   try {
+    const ai = getAiClient();
+    if (!ai) {
+      return questions.map(q => generateFallbackAnswer(q, config.persona));
+    }
+
     const response = await ai.models.generateContent({
       model: "gemini-3.8-flash",
       contents: prompt,
