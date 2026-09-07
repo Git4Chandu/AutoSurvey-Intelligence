@@ -227,7 +227,7 @@ export const LiveScreenWindow: React.FC<LiveScreenWindowProps> = ({
   return (
     <div
       id="live-screen-window"
-      className={`flex flex-col bg-[#0F172A] border border-[#1E293B] rounded-xl overflow-hidden shadow-2xl h-[calc(100vh-18rem)] min-h-[540px] ${className}`}
+      className={`flex flex-col bg-[#0F172A] border border-[#1E293B] rounded-xl overflow-hidden shadow-2xl h-[70vh] min-h-[420px] sm:h-[calc(100vh-18rem)] sm:min-h-[540px] ${className}`}
     >
       {/* Window Chrome Title Bar */}
       <div className="flex items-center justify-between px-3.5 py-2.5 bg-[#080D1A] border-b border-[#1E293B] select-none">

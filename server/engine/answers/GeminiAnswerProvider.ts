@@ -12,11 +12,20 @@ import { TestAnswerProvider } from './TestAnswerProvider.js';
 import { isSelectPlaceholder } from '../parser/OptionParser.js';
 
 export class GeminiAnswerProvider implements IAnswerProvider {
+  private static runtimeApiKey: string | undefined;
   private fallbackProvider = new TestAnswerProvider();
   private aiClient: GoogleGenAI | null = null;
 
+  public static configureApiKey(apiKey: string | undefined): void {
+    GeminiAnswerProvider.runtimeApiKey = apiKey?.trim() || undefined;
+  }
+
+  public static hasConfiguredApiKey(): boolean {
+    return Boolean(GeminiAnswerProvider.runtimeApiKey || process.env.GEMINI_API_KEY);
+  }
+
   constructor() {
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = GeminiAnswerProvider.runtimeApiKey || process.env.GEMINI_API_KEY;
     if (apiKey) {
       this.aiClient = new GoogleGenAI({ apiKey });
     }
@@ -74,6 +83,8 @@ export class GeminiAnswerProvider implements IAnswerProvider {
     const systemPrompt = `You are AutoSurvey Intelligence, an advanced automated survey respondent analyzing and executing online surveys.
 Respondent Persona: ${context.persona}
 ${context.customPersonaPrompt ? `Special Persona Guidelines: ${context.customPersonaPrompt}` : ''}
+${context.surveyReferenceText ? `Authorized survey questionnaire/reference instructions:\n${context.surveyReferenceText.slice(0, 12000)}` : ''}
+Run variation seed: ${context.runSeed || 'default'}
 
 SURVEY QUESTION UNDERSTANDING & ANSWERING REQUIREMENTS:
 1. THOROUGHLY READ & UNDERSTAND each question's prompt, description, and instruction (e.g., "Select all that apply", "Choose your top 2", "Rank your satisfaction", "Explain why...").
@@ -89,6 +100,8 @@ SURVEY QUESTION UNDERSTANDING & ANSWERING REQUIREMENTS:
 5. REASONING: In the "reasoning" property for each question, explicitly state:
    - What the question was asking and required
    - Why the selected option(s) or response was chosen according to the persona profile.
+6. Use the questionnaire/reference instructions and respondent persona as decision context. Do not invent eligibility facts or intentionally circumvent a screener. If an eligibility question cannot be truthfully answered from the available context, choose the safe fallback and explain that limitation.
+7. Avoid blindly repeating a prior selection: when several options are valid, use the run seed and question wording to make a varied but coherent choice. Never sacrifice consistency with explicit instructions or persona.
 
 OUTPUT FORMAT:
 Return ONLY valid JSON matching this schema:
@@ -112,7 +125,7 @@ Formulate thoughtful, valid responses fulfilling every question requirement in s
     let response;
     try {
       response = await this.aiClient!.models.generateContent({
-        model: 'gemini-3.1-flash-lite',
+        model: 'gemini-2.5-flash',
         contents: [
           { role: 'user', parts: [{ text: `${systemPrompt}\n\n${userContent}` }] },
         ],
@@ -122,9 +135,9 @@ Formulate thoughtful, valid responses fulfilling every question requirement in s
         },
       });
     } catch (e1: any) {
-      console.warn('[GeminiAnswerProvider] Primary model gemini-3.1-flash-lite failed, trying gemini-3.8-flash:', e1.message);
+      console.warn('[GeminiAnswerProvider] Primary model gemini-2.5-flash failed, trying gemini-2.0-flash:', e1.message);
       response = await this.aiClient!.models.generateContent({
-        model: 'gemini-3.8-flash',
+        model: 'gemini-2.0-flash',
         contents: [
           { role: 'user', parts: [{ text: `${systemPrompt}\n\n${userContent}` }] },
         ],

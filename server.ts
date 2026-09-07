@@ -6,6 +6,7 @@ import { mockSurveysRouter } from './server/mockSurveys.js';
 import { surveyEngine } from './server/engine/SurveyEngine.js';
 import { PageParser } from './server/engine/parser/PageParser.js';
 import { SimulationConfig } from './src/types.js';
+import { GeminiAnswerProvider } from './server/engine/answers/GeminiAnswerProvider.js';
 
 dotenv.config();
 
@@ -20,6 +21,29 @@ async function startServer() {
   // Health check
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', timestamp: Date.now() });
+  });
+
+  // AI credentials are kept server-side and are never included in survey sessions or SSE payloads.
+  app.get('/api/ai/status', (req, res) => {
+    res.json({
+      provider: 'gemini',
+      configured: GeminiAnswerProvider.hasConfiguredApiKey(),
+    });
+  });
+
+  app.post('/api/ai/config', (req, res) => {
+    const apiKey = typeof req.body?.apiKey === 'string' ? req.body.apiKey.trim() : '';
+    if (!apiKey) {
+      res.status(400).json({ error: 'A Gemini API key is required.' });
+      return;
+    }
+    GeminiAnswerProvider.configureApiKey(apiKey);
+    res.json({ provider: 'gemini', configured: true });
+  });
+
+  app.delete('/api/ai/config', (req, res) => {
+    GeminiAnswerProvider.configureApiKey(undefined);
+    res.json({ provider: 'gemini', configured: false });
   });
 
   // Mock survey routes
@@ -126,12 +150,17 @@ async function startServer() {
   // Get session status (polling)
   app.get('/api/survey/status/:sessionId', (req, res) => {
     const { sessionId } = req.params;
-    const session = surveyEngine.getSession(sessionId);
+    const session = surveyEngine.getStoredSession(sessionId);
     if (!session) {
       res.status(404).json({ error: 'Session not found' });
       return;
     }
     res.json(session);
+  });
+
+  app.get('/api/survey/history', (req, res) => {
+    const rawLimit = Number(req.query.limit || 100);
+    res.json({ sessions: surveyEngine.listStoredSessions(Number.isFinite(rawLimit) ? rawLimit : 100) });
   });
 
   // Real-time Server-Sent Events (SSE) stream for live updates
@@ -177,10 +206,14 @@ async function startServer() {
   });
 
   // Resume session
-  app.post('/api/survey/resume/:sessionId', (req, res) => {
-    const { sessionId } = req.params;
-    surveyEngine.resumeSession(sessionId);
-    res.json({ ok: true });
+  app.post('/api/survey/resume/:sessionId', async (req, res) => {
+    try {
+      const { sessionId } = req.params;
+      await surveyEngine.resumeSession(sessionId);
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to resume survey session.' });
+    }
   });
 
   // Stop session

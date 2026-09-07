@@ -49,7 +49,7 @@ export const RedirectedSurveyModal: React.FC<RedirectedSurveyModalProps> = ({
   const allAnswers: QuestionAnswer[] = archive.history.flatMap(h => h.answers);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/85 backdrop-blur-md animate-in fade-in duration-200 overscroll-contain">
       <div
         className={`bg-[#0A0E1A] border-2 border-indigo-500/60 rounded-2xl shadow-2xl flex flex-col overflow-hidden transition-all duration-300 ${
           isFullScreen ? 'w-full h-full rounded-none' : 'w-full max-w-6xl max-h-[92vh] h-[860px]'
@@ -204,7 +204,7 @@ export const RedirectedSurveyModal: React.FC<RedirectedSurveyModalProps> = ({
           {/* View: Results Table View (or Right side of Split View) */}
           {(activeView === 'results' || activeView === 'split') && (
             <div
-              className={`flex flex-col bg-[#0A0E1A] overflow-y-auto ${
+              className={`flex flex-col bg-[#0A0E1A] overflow-y-auto overscroll-contain ${
                 activeView === 'split' ? 'lg:w-1/2 h-1/2 lg:h-full' : 'w-full h-full'
               }`}
             >

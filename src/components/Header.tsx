@@ -77,6 +77,13 @@ export const Header: React.FC<HeaderProps> = ({
             EXCEPTION HALT
           </span>
         );
+      case 'aborted':
+        return (
+          <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-mono bg-[#030712] text-rose-400 border border-rose-900/50">
+            <AlertCircle className="w-3.5 h-3.5 text-rose-500" />
+            ABORTED
+          </span>
+        );
     }
   };
 

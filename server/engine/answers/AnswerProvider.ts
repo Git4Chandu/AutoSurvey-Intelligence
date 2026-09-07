@@ -7,6 +7,8 @@ import { PageModel, PageAnswersModel } from '../questions/QuestionModel.js';
 export interface AnswerContext {
   persona: string;
   customPersonaPrompt?: string;
+  surveyReferenceText?: string;
+  runSeed?: string;
   pageIndex: number;
   surveyUrl: string;
   previousAnswers?: any[];
