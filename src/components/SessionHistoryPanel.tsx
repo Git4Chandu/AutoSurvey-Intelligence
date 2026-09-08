@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Clock3, History, RefreshCw, FolderOpen, CheckCircle2, XCircle, PauseCircle, Maximize2, X } from 'lucide-react';
+import { Clock3, History, RefreshCw, FolderOpen, CheckCircle2, XCircle, PauseCircle, X } from 'lucide-react';
 import { SessionStatus, SurveySession } from '../types';
 
 interface SessionSummary {
@@ -16,6 +16,7 @@ interface SessionSummary {
 interface SessionHistoryPanelProps {
   activeSessionId?: string;
   onLoad: (session: SurveySession) => void;
+  fullViewRequest?: number;
 }
 
 const formatDate = (timestamp: number) => new Date(timestamp).toLocaleString();
@@ -37,11 +38,18 @@ const statusClasses: Record<SessionStatus, string> = {
 export const SessionHistoryPanel: React.FC<SessionHistoryPanelProps> = ({
   activeSessionId,
   onLoad,
+  fullViewRequest = 0,
 }) => {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
   const [fullView, setFullView] = useState(false);
+
+  useEffect(() => {
+    if (fullViewRequest > 0) {
+      setFullView(true);
+    }
+  }, [fullViewRequest]);
 
   useEffect(() => {
     if (!fullView) return;
@@ -111,16 +119,7 @@ export const SessionHistoryPanel: React.FC<SessionHistoryPanelProps> = ({
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
             Refresh
           </button>
-          {!fullView ? (
-            <button
-              type="button"
-              onClick={() => setFullView(true)}
-              className="inline-flex items-center gap-1.5 rounded-md border border-emerald-800/70 bg-emerald-950/40 px-2.5 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider text-emerald-300 hover:bg-emerald-900/60"
-            >
-              <Maximize2 className="h-3.5 w-3.5" />
-              Full View
-            </button>
-          ) : (
+          {fullView && (
             <button
               type="button"
               onClick={() => setFullView(false)}

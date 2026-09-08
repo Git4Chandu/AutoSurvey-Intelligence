@@ -313,7 +313,25 @@ export const SimulationSettings: React.FC<SimulationSettingsProps> = ({
                 {config.engineMode || 'hybrid'}
               </span>
             </label>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => onChange({ ...config, engineMode: 'ai' })}
+                className={`text-left p-2.5 rounded-lg border text-xs transition-all ${
+                  config.engineMode === 'ai'
+                    ? 'bg-emerald-950/40 border-emerald-500 text-emerald-100 ring-1 ring-emerald-500/30'
+                    : 'bg-[#030712] border-[#1E293B] text-slate-400 hover:text-slate-200 hover:border-[#334155]'
+                } disabled:opacity-50`}
+              >
+                <div className="font-mono font-bold text-slate-200 flex items-center justify-between">
+                  AI Only
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-900/60 text-emerald-300 font-mono">INSTRUCTIONS</span>
+                </div>
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Gemini must review every page and follow the supplied questionnaire instructions. No silent fallback.
+                </p>
+              </button>
               <button
                 type="button"
                 disabled={disabled}

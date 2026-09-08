@@ -15,6 +15,7 @@ export class GeminiAnswerProvider implements IAnswerProvider {
   private static runtimeApiKey: string | undefined;
   private fallbackProvider = new TestAnswerProvider();
   private aiClient: GoogleGenAI | null = null;
+  private readonly requireAi: boolean;
 
   public static configureApiKey(apiKey: string | undefined): void {
     GeminiAnswerProvider.runtimeApiKey = apiKey?.trim() || undefined;
@@ -24,7 +25,8 @@ export class GeminiAnswerProvider implements IAnswerProvider {
     return Boolean(GeminiAnswerProvider.runtimeApiKey || process.env.GEMINI_API_KEY);
   }
 
-  constructor() {
+  constructor(requireAi = false) {
+    this.requireAi = requireAi;
     const apiKey = GeminiAnswerProvider.runtimeApiKey || process.env.GEMINI_API_KEY;
     if (apiKey) {
       this.aiClient = new GoogleGenAI({ apiKey });
@@ -33,14 +35,24 @@ export class GeminiAnswerProvider implements IAnswerProvider {
 
   public async getAnswers(pageModel: PageModel, context: AnswerContext): Promise<PageAnswersModel> {
     if (!this.aiClient) {
-      console.log('[GeminiAnswerProvider] No GEMINI_API_KEY detected, using deterministic engine.');
-      return this.fallbackProvider.getAnswers(pageModel, context);
+      if (this.requireAi) {
+        throw new Error('AI mode is selected, but Gemini is not connected. Add a Gemini API key in Heuristic Parameters.');
+      }
+      console.warn('[GeminiAnswerProvider] No Gemini API key detected; using deterministic fallback for this page.');
+      const fallbackAnswers = await this.fallbackProvider.getAnswers(pageModel, context);
+      for (const key of Object.keys(fallbackAnswers)) {
+        fallbackAnswers[key].reasoning = `[Deterministic fallback: Gemini is not connected] ${fallbackAnswers[key].reasoning}`;
+      }
+      return fallbackAnswers;
     }
 
     try {
       return await this.callGemini(pageModel, context);
     } catch (err: any) {
-      console.warn(`[GeminiAnswerProvider] AI service unavailable or quota reached (${err.message}). Falling back to deterministic engine.`);
+      if (this.requireAi) {
+        throw new Error(`Gemini could not review page ${context.pageIndex}: ${err?.message || 'unknown AI error'}`);
+      }
+      console.warn(`[GeminiAnswerProvider] AI review failed for page ${context.pageIndex} (${err.message}). Falling back to deterministic engine.`);
       const fallbackAnswers = await this.fallbackProvider.getAnswers(pageModel, context);
       // Annotate reasoning so user sees fallback happened gracefully
       for (const key of Object.keys(fallbackAnswers)) {
@@ -80,11 +92,18 @@ export class GeminiAnswerProvider implements IAnswerProvider {
       }),
     }));
 
-    const systemPrompt = `You are AutoSurvey Intelligence, an advanced automated survey respondent analyzing and executing online surveys.
+    const systemPrompt = `You are AutoSurvey Intelligence, an AI decision module for authorized survey fixtures and test environments.
 Respondent Persona: ${context.persona}
 ${context.customPersonaPrompt ? `Special Persona Guidelines: ${context.customPersonaPrompt}` : ''}
-${context.surveyReferenceText ? `Authorized survey questionnaire/reference instructions:\n${context.surveyReferenceText.slice(0, 12000)}` : ''}
+${context.surveyReferenceText ? `AUTHORITATIVE TEST CONTEXT (use this before making each answer):
+${context.surveyReferenceText.slice(0, 12000)}` : 'AUTHORITATIVE TEST CONTEXT: none supplied.'}
 Run variation seed: ${context.runSeed || 'default'}
+
+DECISION ORDER:
+1. Use the authoritative test context and persona facts.
+2. Apply the current question text, question instruction, field type, and available option labels.
+3. Return the exact HTML option value for the chosen label; never substitute the first option or a numeric-looking value without matching its label.
+4. Keep the decision truthful to the supplied test persona. Do not fabricate eligibility or bypass a live third-party screener.
 
 SURVEY QUESTION UNDERSTANDING & ANSWERING REQUIREMENTS:
 1. THOROUGHLY READ & UNDERSTAND each question's prompt, description, and instruction (e.g., "Select all that apply", "Choose your top 2", "Rank your satisfaction", "Explain why...").
@@ -100,7 +119,7 @@ SURVEY QUESTION UNDERSTANDING & ANSWERING REQUIREMENTS:
 5. REASONING: In the "reasoning" property for each question, explicitly state:
    - What the question was asking and required
    - Why the selected option(s) or response was chosen according to the persona profile.
-6. Use the questionnaire/reference instructions and respondent persona as decision context. Do not invent eligibility facts or intentionally circumvent a screener. If an eligibility question cannot be truthfully answered from the available context, choose the safe fallback and explain that limitation.
+6. Use the authoritative test context and respondent persona as decision context. If an eligibility question cannot be truthfully answered from the available context, stop with an explicit limitation rather than inventing a qualifying answer.
 7. Avoid blindly repeating a prior selection: when several options are valid, use the run seed and question wording to make a varied but coherent choice. Never sacrifice consistency with explicit instructions or persona.
 
 OUTPUT FORMAT:
@@ -156,7 +175,11 @@ Formulate thoughtful, valid responses fulfilling every question requirement in s
       parsed = JSON.parse(responseText);
     } catch (parseErr: any) {
       console.warn('[GeminiAnswerProvider] Failed to parse Gemini response as JSON, falling back:', parseErr.message);
-      return this.fallbackProvider.getAnswers(pageModel, context);
+      const fallbackAnswers = await this.fallbackProvider.getAnswers(pageModel, context);
+      for (const key of Object.keys(fallbackAnswers)) {
+        fallbackAnswers[key].reasoning = `[Deterministic fallback after Gemini response parsing failure] ${fallbackAnswers[key].reasoning}`;
+      }
+      return fallbackAnswers;
     }
 
     const answers: PageAnswersModel = {};
@@ -180,7 +203,10 @@ Formulate thoughtful, valid responses fulfilling every question requirement in s
     for (const q of questionsToAnswer) {
       if (!answers[q.id]) {
         const fb = await this.fallbackProvider.getAnswers({ ...pageModel, questions: [q] }, context);
-        if (fb[q.id]) answers[q.id] = fb[q.id];
+        if (fb[q.id]) {
+          fb[q.id].reasoning = `[Deterministic fallback: Gemini omitted this question] ${fb[q.id].reasoning}`;
+          answers[q.id] = fb[q.id];
+        }
       }
     }
 

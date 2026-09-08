@@ -28,7 +28,8 @@ import {
   Globe,
   AlertTriangle,
   Monitor,
-  LayoutDashboard
+  LayoutDashboard,
+  Maximize2
 } from 'lucide-react';
 
 const DEFAULT_CONFIG: SimulationConfig = {
@@ -49,6 +50,7 @@ export default function App() {
   const [url, setUrl] = useState<string>('/api/mock-surveys/confirmit-simulation');
   const [config, setConfig] = useState<SimulationConfig>(() => ({
     ...DEFAULT_CONFIG,
+    engineMode: 'ai',
     surveyReferenceText: window.localStorage.getItem(SURVEY_REFERENCE_STORAGE) || '',
   }));
   const [session, setSession] = useState<SurveySession | null>(null);
@@ -60,6 +62,7 @@ export default function App() {
   const [isInspecting, setIsInspecting] = useState<boolean>(false);
   const [inspectedPage, setInspectedPage] = useState<SurveyPage | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
+  const [fullViewRequest, setFullViewRequest] = useState(0);
 
   const eventSourceRef = useRef<EventSource | null>(null);
 
@@ -393,6 +396,16 @@ export default function App() {
               <span>Saved Redirected Survey ({session.redirectedSurveys.length})</span>
             </button>
           )}
+          {session && (
+            <button
+              type="button"
+              onClick={() => setFullViewRequest(request => request + 1)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-950/40 hover:bg-emerald-900/60 border border-emerald-800/70 text-emerald-300 rounded-lg text-xs font-mono font-bold transition-all shadow-md cursor-pointer mb-1"
+            >
+              <Maximize2 className="h-3.5 w-3.5" />
+              Full View
+            </button>
+          )}
         </div>
 
         {/* Tab Contents — flex-1 so this area fills all remaining viewport height */}
@@ -405,6 +418,7 @@ export default function App() {
                 <QuestionsView
                   currentPageData={displayPageData}
                   currentAnswers={session?.currentAnswers || []}
+                  aiProposalAnswers={session?.aiProposalAnswers}
                   history={session?.history || []}
                   activeDelay={session?.activeDelay}
                   isCompleted={session?.status === 'completed'}
@@ -422,6 +436,7 @@ export default function App() {
                   onSelectPageIndex={setSelectedScreenPageIndex}
                   fallbackSurveyUrl={url}
                   inspectedPage={inspectedPage}
+                  aiProposalAnswers={session?.aiProposalAnswers}
                   className="flex-1 min-h-0"
                 />
               </div>
@@ -435,6 +450,7 @@ export default function App() {
                 <QuestionsView
                   currentPageData={displayPageData}
                   currentAnswers={session?.currentAnswers || []}
+                  aiProposalAnswers={session?.aiProposalAnswers}
                   history={session?.history || []}
                   activeDelay={session?.activeDelay}
                   isCompleted={session?.status === 'completed'}
@@ -558,6 +574,7 @@ export default function App() {
                 onSelectPageIndex={setSelectedScreenPageIndex}
                 fallbackSurveyUrl={url}
                 inspectedPage={inspectedPage}
+                aiProposalAnswers={session?.aiProposalAnswers}
               />
             </div>
           )}
@@ -570,6 +587,7 @@ export default function App() {
         <SessionHistoryPanel
           activeSessionId={session?.sessionId}
           onLoad={handleLoadSession}
+          fullViewRequest={fullViewRequest}
         />
       </main>
 

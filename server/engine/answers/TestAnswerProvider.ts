@@ -42,7 +42,7 @@ export class TestAnswerProvider implements IAnswerProvider {
 
       results[question.id] = {
         fields: fieldAnswers,
-        reasoning: `Selected based on respondent profile [${context.persona}] adhering to questionnaire constraints.`,
+        reasoning: `[Deterministic engine] Selected based on respondent profile [${context.persona}] adhering to questionnaire constraints.`,
         delayBreakdown: {
           readingMs: 600,
           thinkingMs: 400,

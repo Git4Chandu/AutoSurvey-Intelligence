@@ -33,6 +33,7 @@ interface LiveScreenWindowProps {
   isStandalone?: boolean;
   fallbackSurveyUrl?: string;
   inspectedPage?: SurveyPage | null;
+  aiProposalAnswers?: QuestionAnswer[];
 }
 
 export const LiveScreenWindow: React.FC<LiveScreenWindowProps> = ({
@@ -43,6 +44,7 @@ export const LiveScreenWindow: React.FC<LiveScreenWindowProps> = ({
   isStandalone = false,
   fallbackSurveyUrl = '/api/mock-surveys/developer-tools',
   inspectedPage = null,
+  aiProposalAnswers = [],
 }) => {
   const [zoomLevel, setZoomLevel] = useState<number>(100);
   const [refreshKey, setRefreshKey] = useState<number>(0);
@@ -98,6 +100,7 @@ export const LiveScreenWindow: React.FC<LiveScreenWindowProps> = ({
     }
     return session?.currentAnswers || [];
   }, [isViewingHistory, historyEntry, session?.currentAnswers]);
+  const proposalAnswers = isViewingHistory ? [] : aiProposalAnswers;
 
   // Determine target screen URL for fetching
   const screenTargetUrl = useMemo(() => {
@@ -364,6 +367,7 @@ export const LiveScreenWindow: React.FC<LiveScreenWindowProps> = ({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-36 overflow-y-auto pr-1">
             {activePageData.questions.map((q, idx) => {
               const ans = activeAnswers.find(a => a.questionId === q.id);
+              const proposal = proposalAnswers.find(a => a.questionId === q.id);
               const isSelected = selectedQuestionId === q.id || (!selectedQuestionId && idx === 0);
 
               return (
@@ -413,11 +417,25 @@ export const LiveScreenWindow: React.FC<LiveScreenWindowProps> = ({
                     </div>
                   )}
 
-                  {/* Selected Answer and AI Reasoning */}
+                  {/* AI proposal and applied server-side answer */}
+                  {proposal && (
+                    <div className="mt-1.5 pt-1.5 border-t border-purple-800/60 text-[11px] font-mono space-y-1">
+                      <div className="text-purple-300 font-medium">
+                        AI proposed before apply:{' '}
+                        <span className="font-bold underline">
+                          {proposal.selectedValues?.join(', ') || proposal.textResponse || 'N/A'}
+                        </span>
+                      </div>
+                      <div className="text-slate-400 text-[10px] leading-relaxed line-clamp-2">
+                        {proposal.reasoning}
+                      </div>
+                    </div>
+                  )}
+                  {/* Applied answer and AI reasoning */}
                   {ans && (
                     <div className="mt-1.5 pt-1.5 border-t border-[#1E293B]/80 text-[11px] font-mono space-y-1">
                       <div className="text-emerald-300 font-medium">
-                        Selected: <span className="font-bold underline">{ans.selectedValues?.join(', ') || ans.textResponse || 'N/A'}</span>
+                        Server-applied: <span className="font-bold underline">{ans.selectedValues?.join(', ') || ans.textResponse || 'N/A'}</span>
                       </div>
                       {ans.reasoning && (
                         <div className="text-slate-400 text-[10px] leading-relaxed line-clamp-2">
@@ -472,7 +490,7 @@ export const LiveScreenWindow: React.FC<LiveScreenWindowProps> = ({
             key={`direct_${screenTargetUrl}_${zoomLevel}`}
             src={screenTargetUrl}
             title={`Survey Screen Page ${currentPageIndex}`}
-            className="w-full h-full border-none transition-transform origin-top-left"
+            className="w-full h-full border-none transition-transform origin-top-left pointer-events-none"
             style={{
               transform: zoomLevel !== 100 ? `scale(${zoomLevel / 100})` : undefined,
               width: zoomLevel !== 100 ? `${10000 / zoomLevel}%` : '100%',
@@ -485,7 +503,7 @@ export const LiveScreenWindow: React.FC<LiveScreenWindowProps> = ({
             key={`doc_${currentPageIndex}_${refreshKey}_${zoomLevel}`}
             srcDoc={htmlContent}
             title={`Survey Screen Page ${currentPageIndex}`}
-            className="w-full h-full border-none transition-transform origin-top-left"
+            className="w-full h-full border-none transition-transform origin-top-left pointer-events-none"
             style={{
               transform: zoomLevel !== 100 ? `scale(${zoomLevel / 100})` : undefined,
               width: zoomLevel !== 100 ? `${10000 / zoomLevel}%` : '100%',

@@ -80,8 +80,10 @@ export interface QuestionAnswer {
   };
   questionDescription?: string;
   optionsSummary?: string[];
+  optionLabelsByValue?: Record<string, string>;
   inputName?: string;
   fieldAnswers?: Record<string, any>;
+  answerSource?: 'gemini' | 'deterministic-fallback' | 'deterministic';
 }
 
 export type PersonaType =
@@ -188,6 +190,7 @@ export interface SurveySession {
   totalEstimatedPages: number;
   currentPageData: SurveyPage | null;
   currentAnswers: QuestionAnswer[];
+  aiProposalAnswers?: QuestionAnswer[];
   history: PageHistoryEntry[];
   logs: LogEntry[];
   totalQuestionsAnswered: number;

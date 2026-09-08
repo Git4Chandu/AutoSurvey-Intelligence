@@ -143,7 +143,7 @@ export class SurveyEngine {
     const answerProvider: IAnswerProvider =
       mode === 'deterministic'
         ? new TestAnswerProvider()
-        : new GeminiAnswerProvider();
+        : new GeminiAnswerProvider(mode === 'ai');
 
     const session: SurveySession = {
       sessionId,
@@ -335,6 +335,7 @@ export class SurveyEngine {
       // Convert to UI survey page representation
       const uiPage = this.toUiSurveyPage(currentPageModel, pageIndex);
       session.currentPageData = uiPage;
+      session.aiProposalAnswers = undefined;
       session.status = 'answering';
       this.notify(sessionId);
 
@@ -348,7 +349,14 @@ export class SurveyEngine {
       let pageAnswers: PageAnswersModel = {};
 
       if (!currentPageModel.isInfoOnly && currentPageModel.questions.length > 0) {
-        this.addLog(ctx, 'action', `Formulating responses for ${currentPageModel.questions.length} questions...`);
+        this.addLog(ctx, 'gemini', `AI reviewing Page ${pageIndex}: ${currentPageModel.questions.length} questions against persona and questionnaire instructions...`);
+        this.addLog(
+          ctx,
+          'gemini',
+          session.config.surveyReferenceText
+            ? `AI context loaded: Heuristic Parameters/reference instructions (${session.config.surveyReferenceText.length} characters).`
+            : 'AI context loaded: no Heuristic Parameters/reference instructions supplied; using persona and page instructions.'
+        );
 
         pageAnswers = await ctx.answerProvider.getAnswers(currentPageModel, {
           persona: session.config.persona,
@@ -359,6 +367,29 @@ export class SurveyEngine {
           surveyUrl: currentPageUrl,
           attemptIndex: retryCount,
         });
+        const fallbackCount = Object.values(pageAnswers).filter(answer =>
+          answer.reasoning?.startsWith('[Deterministic fallback') ||
+          answer.reasoning?.startsWith('[Deterministic Engine]')
+        ).length;
+        this.addLog(
+          ctx,
+          fallbackCount > 0 ? 'warn' : 'gemini',
+          fallbackCount > 0
+            ? `AI review completed for Page ${pageIndex}, but ${fallbackCount} decision(s) used deterministic fallback.`
+            : `AI review completed for Page ${pageIndex}; ${Object.keys(pageAnswers).length} question decisions received before validation.`
+        );
+        this.addLog(
+          ctx,
+          fallbackCount > 0 ? 'warn' : 'gemini',
+          `Proposed answers before DOM apply: ${JSON.stringify(
+            Object.fromEntries(Object.entries(pageAnswers).map(([id, answer]) => [id, answer.fields]))
+          )}`
+        );
+
+        // Publish the raw provider proposal first so the UI shows exactly what
+        // Gemini returned before validation or DOM application changes it.
+        session.aiProposalAnswers = this.toUiQuestionAnswers(currentPageModel, pageAnswers);
+        this.notify(sessionId);
 
         // STEP 3: Validation & Auto-Repair (README Section 15, 18)
         const validation = AnswerValidator.validateAndRepair(currentPageModel, pageAnswers);
@@ -878,7 +909,8 @@ export class SurveyEngine {
 
   private toUiQuestionAnswers(
     pageModel: PageModel,
-    answers: PageAnswersModel
+    answers: PageAnswersModel,
+    providerSource?: 'gemini' | 'deterministic'
   ): QuestionAnswer[] {
     const list: QuestionAnswer[] = [];
 
@@ -945,6 +977,9 @@ export class SurveyEngine {
         .flatMap(f => f.options || [])
         .map(o => o.text || o.value)
         .filter(Boolean);
+      const optionLabelsByValue = Object.fromEntries(
+        q.fields.flatMap(f => f.options || []).map(option => [String(option.value), option.text || option.value])
+      );
 
       list.push({
         questionId: q.id,
@@ -961,8 +996,12 @@ export class SurveyEngine {
         },
         questionDescription: q.instruction || undefined,
         optionsSummary: optionsSummary.length > 0 ? optionsSummary : undefined,
+        optionLabelsByValue,
         inputName: q.fields[0]?.name,
         fieldAnswers: qAns.fields,
+        answerSource: providerSource || (qAns.reasoning?.startsWith('[Deterministic')
+          ? 'deterministic-fallback'
+          : 'gemini'),
       });
     }
 
@@ -1164,7 +1203,10 @@ export class SurveyEngine {
                 // 2. Radio and checkboxes matching values
                 (ans.selectedValues || []).forEach(function(val) {
                   try {
-                    const sel = 'input[value="' + CSS.escape(val) + '"], input[name*="' + CSS.escape(ans.questionId) + '"][value="' + CSS.escape(val) + '"]';
+                    const scope = ans.inputName
+                      ? 'input[name="' + CSS.escape(ans.inputName) + '"]'
+                      : 'input[name*="' + CSS.escape(ans.questionId) + '"]';
+                    const sel = scope + '[value="' + CSS.escape(val) + '"]';
                     const inputs = document.querySelectorAll(sel);
                     inputs.forEach(function(input) {
                       input.checked = true;
