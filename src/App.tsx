@@ -204,7 +204,7 @@ export default function App() {
   const displayPageData = session?.currentPageData || inspectedPage;
 
   return (
-    <div className="h-screen overflow-hidden bg-[#0A0A0B] text-slate-100 font-sans flex flex-col selection:bg-emerald-900 selection:text-emerald-100">
+    <div className="h-screen bg-[#0A0A0B] text-slate-100 font-sans flex flex-col selection:bg-emerald-900 selection:text-emerald-100">
       {/* Header bar */}
       <Header
         status={currentStatus}
@@ -214,7 +214,7 @@ export default function App() {
         totalEstimatedPages={session?.totalEstimatedPages || 1}
       />
 
-      <main className="flex-1 min-h-0 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-col gap-5">
+      <main className="flex-1 min-h-0 overflow-y-auto max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-col gap-5">
         {/* Survey URL Input & Controls */}
         <UrlInputBar
           url={url}
