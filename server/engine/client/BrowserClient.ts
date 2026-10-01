@@ -217,7 +217,10 @@ export class BrowserClient {
               gMSel.value = ev;
               if (jq2) { jq2(gMSel).val(ev).trigger('change'); } else { gMSel.dispatchEvent(new Event('change', { bubbles: true })); }
             }
-            if (gDSel) { gDSel.value = ev; }
+            if (gDSel) {
+              gDSel.value = ev;
+              if (jq2) { jq2(gDSel).val(ev).trigger('change'); } else { gDSel.dispatchEvent(new Event('change', { bubbles: true })); }
+            }
           }
 
           if (!radio && !cfGridMatch) {
