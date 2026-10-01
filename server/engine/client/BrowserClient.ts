@@ -165,7 +165,62 @@ export class BrowserClient {
               radio.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
               radio.dispatchEvent(new Event('change', { bubbles: true }));
             }
-          } else {
+          }
+
+          // Confirmit 3D-grid fields (e.g. S3xY_1, S3xM_1): pattern {qId}x{Dim}_{row}.
+          // For radio-based surveys radios have name="S3xY_1"; for select-based surveys
+          // selects have id="mobile_S3xY_1_input" with empty name — Confirmit's server
+          // expects the original field names (S3xY_1, S3xM_1) posted directly, NOT gS3_N.
+          const cfGridMatch = en.match(/^(\w+)x[A-Z]_(\d+)$/);
+          if (cfGridMatch) {
+            const gqId = cfGridMatch[1];
+            // Check if this survey uses radios (radio-based) or selects (select-based)
+            const gRads = Array.from(
+              document.querySelectorAll('input[type="radio"][name^="' + gqId + 'x"]')
+            ) as HTMLInputElement[];
+            if (gRads.length === 0) {
+              // Select-based: inject field name directly into the form POST body
+              const gForm = document.querySelector('form') as HTMLFormElement | null;
+              if (gForm) {
+                const gOld = gForm.querySelector('input[name="' + en + '"]');
+                if (gOld) gOld.remove();
+                const gInp = document.createElement('input');
+                gInp.type = 'hidden'; gInp.name = en; gInp.value = ev;
+                gForm.appendChild(gInp);
+              }
+            } else {
+              // Radio-based: Confirmit maps them sequentially as gS3_1, gS3_2 in gS3_hidden
+              const gCont = document.getElementById('g' + gqId + '_hidden');
+              if (gCont) {
+                const gSeen: Record<string, boolean> = {};
+                const gNames: string[] = [];
+                for (let gri = 0; gri < gRads.length; gri++) {
+                  const grn = gRads[gri].name;
+                  if (!gSeen[grn]) { gSeen[grn] = true; gNames.push(grn); }
+                }
+                const gPos = gNames.indexOf(en);
+                if (gPos >= 0) {
+                  const gFName = 'g' + gqId + '_' + (gPos + 1);
+                  const gOld = gCont.querySelector('input[name="' + gFName + '"]');
+                  if (gOld) gOld.remove();
+                  const gInp = document.createElement('input');
+                  gInp.type = 'hidden'; gInp.name = gFName; gInp.value = ev;
+                  gCont.appendChild(gInp);
+                }
+              }
+            }
+            // Also sync the visible SELECT value
+            const jq2 = (window as any).jQuery || (window as any).$;
+            const gMSel = document.getElementById('mobile_' + en + '_input') as HTMLSelectElement | null;
+            const gDSel = document.getElementById('desktop_' + en + '_input') as HTMLSelectElement | null;
+            if (gMSel) {
+              gMSel.value = ev;
+              if (jq2) { jq2(gMSel).val(ev).trigger('change'); } else { gMSel.dispatchEvent(new Event('change', { bubbles: true })); }
+            }
+            if (gDSel) { gDSel.value = ev; }
+          }
+
+          if (!radio && !cfGridMatch) {
             // For Confirmit responsive grid fields (name ends with "_input"),
             // look up the option label from the native select and click the matching
             // cf-radio so Confirmit's own click handler populates _hidden correctly.
