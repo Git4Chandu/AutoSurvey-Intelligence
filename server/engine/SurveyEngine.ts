@@ -557,6 +557,16 @@ export class SurveyEngine {
       }
     }
 
+    // 6. Confirmit's revision token changes on every genuine page advance. This is the
+    // most reliable indicator when the URL and question structure look identical.
+    if (
+      currentModel.revision &&
+      nextModel.revision &&
+      currentModel.revision !== nextModel.revision
+    ) {
+      return true;
+    }
+
     return false;
   }
 

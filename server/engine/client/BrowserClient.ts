@@ -216,6 +216,15 @@ export class BrowserClient {
               radio.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
               radio.dispatchEvent(new Event('change', { bubbles: true }));
             }
+            // Confirmit renders visual radio wrappers (.cf-radio-answer) with id "{field}_{value}".
+            // cfApi registers the answer via click handlers on these elements, not the native radio.
+            // Clicking the wrapper ensures cfApi's internal state is updated so validation passes.
+            const cfEl = document.getElementById(en + '_' + ev);
+            if (cfEl) {
+              const jqCf = (window as any).jQuery || (window as any).$;
+              if (jqCf) { jqCf(cfEl).trigger('click'); }
+              else { cfEl.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); }
+            }
           }
 
           // Confirmit 3D-grid fields (e.g. S3xY_1, S3xM_1): pattern {qId}x{Dim}_{row}.
@@ -405,7 +414,11 @@ export class BrowserClient {
         const el = await this.pg.$(sel);
         if (el) {
           await Promise.all([
-            this.pg.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 }),
+            // 10 s is enough for full-navigation surveys (POST → new page).
+            // If Confirmit uses cfApi/AJAX navigation, no browser-level navigation fires;
+            // we catch the timeout and fall through to waitForStableDom which reads the
+            // updated DOM after AJAX completes — avoiding the old 45-second per-page stall.
+            this.pg.waitForNavigation({ waitUntil: 'networkidle2', timeout: 10000 }),
             this.pg.click(sel),
           ]);
           clicked = true;
@@ -421,7 +434,7 @@ export class BrowserClient {
       // Fallback: submit the form via JS
       try {
         await Promise.all([
-          this.pg.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }),
+          this.pg.waitForNavigation({ waitUntil: 'networkidle2', timeout: 10000 }),
           this.pg.evaluate(() => {
             const form = document.querySelector<HTMLFormElement>('form');
             if (form) form.submit();
